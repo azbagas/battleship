@@ -1,0 +1,55 @@
+# Battleship
+
+A browser-based, real-time, two-player online Battleship game built as a React/TypeScript SPA frontend with a server-authoritative Go + SQLite backend over WebSockets.
+
+## Documentation
+- [PRD (Product Requirements)](docs/PRD.md): Scope, user flows, and success criteria.
+- [Architecture](docs/ARCHITECTURE.md): Technical architecture, data model, and invariants.
+- [Tasks](docs/TASKS.md): Current development plan and task progress.
+
+## Prerequisites
+- [Go](https://go.dev/) 1.23+
+- [Node.js](https://nodejs.org/) 22+ & npm
+- [Docker](https://www.docker.com/) & Docker Compose (optional for local containerized run)
+
+## Quick Start
+
+### Install
+```bash
+cd frontend && npm install && cd ../backend && go mod download
+```
+
+### Run Locally
+Backend:
+```bash
+cd backend
+go run ./cmd/server
+```
+
+Frontend:
+```bash
+cd frontend
+npm run dev
+```
+
+### Run with Docker Compose
+```bash
+docker compose up --build
+```
+Access frontend at `http://localhost:3000` and backend health check at `http://localhost:8080/healthz`.
+
+### Test
+```bash
+cd backend && go test -race ./... && cd ../frontend && npm test
+```
+
+### Lint
+```bash
+cd backend && golangci-lint run && cd ../frontend && npm run lint
+```
+
+### Build
+```bash
+cd backend && go build ./cmd/server && cd ../frontend && npm run build
+```
+

@@ -10,14 +10,14 @@ Blocked: nothing
 
 Known issues: none
 
-Next up: T-01 [setup] Scaffold monorepo, test runners, linters, Docker Compose, and `/healthz` endpoint.
+Next up: T-02 [F-01] Implement backend session registry, WebSocket handshake (`hello` / `hello.ok`), display name sanitization (1–20 trimmed chars, control chars stripped), and single-active-connection rule per session token.
 
 <!-- Update this block at the end of every session. If it passes ~15 lines, move it to STATUS.md. -->
 
 ## v1
 
 ### Setup
-- [ ] T-01 [setup] Scaffold monorepo (`backend/` Go module, `frontend/` Vite + React + TypeScript, `docker-compose.yml`), test runners, linters, and `/healthz` endpoint.
+- [x] T-01 [setup] Scaffold monorepo (`backend/` Go module, `frontend/` Vite + React + TypeScript, `docker-compose.yml`), test runners, linters, and `/healthz` endpoint.
   Done when: `go test ./...`, frontend test/lint/build commands, and `GET /healthz` all succeed locally and via Docker Compose.
 
 ### F-01 Display Name & Session Identity
