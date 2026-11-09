@@ -10,7 +10,7 @@ Blocked: nothing
 
 Known issues: none
 
-Next up: T-03 [F-01] Build frontend Home screen with display name input, `localStorage` persistence (`sessionToken`, `displayName`), WebSocket client wrapper, and automatic state restoration across page refreshes.
+Next up: T-04 [F-02] Implement backend in-memory lobby manager (`lobby.create`, `lobby.cancel`, atomic `lobby.join`, `lobby.snapshot`, `lobby.update`) enforcing one active game per player and the 10-room global cap.
 
 <!-- Update this block at the end of every session. If it passes ~15 lines, move it to STATUS.md. -->
 
@@ -23,7 +23,7 @@ Next up: T-03 [F-01] Build frontend Home screen with display name input, `localS
 ### F-01 Display Name & Session Identity
 - [x] T-02 [F-01] Implement backend session registry, WebSocket handshake (`hello` / `hello.ok`), display name sanitization (1–20 trimmed chars, control chars stripped), and single-active-connection rule per session token.
   Done when: unit and WebSocket tests verify token issuance, session restoration on reconnect, name validation bounds, and rejection of a second concurrent connection with the same token.
-- [ ] T-03 [F-01] Build frontend Home screen with display name input, `localStorage` persistence (`sessionToken`, `displayName`), WebSocket client wrapper, and automatic state restoration across page refreshes.
+- [x] T-03 [F-01] Build frontend Home screen with display name input, `localStorage` persistence (`sessionToken`, `displayName`), WebSocket client wrapper, and automatic state restoration across page refreshes.
   Done when: a player can enter a name, connect, refresh the browser, and remain recognized with the same session identity.
 
 ### F-02 Live Public Lobby
@@ -90,6 +90,7 @@ Next up: T-03 [F-01] Build frontend Home screen with display name input, `localS
      Format: YYYY-MM-DD: what was decided and why. -->
 - 2026-11-09: Initial v1 defaults locked from PRD: 60s placement timer, 30s turn timer (auto-fires random untargeted cell on timeout; no AFK forfeit on repeated timeouts), 60s disconnect grace period, 10-room global cap (waiting + active), no timeout on pre-game ready-up, and second tab with same session token rejected.
 - 2026-11-09: T-02 implemented using `github.com/coder/websocket`; unrecognized session token in `hello` gracefully issues a new session with fresh tokens to handle server restarts seamlessly.
+- 2026-11-09: T-03 frontend implemented with React 19 context + WebSocket client wrapper; handles automatic session restoration from `localStorage`, reverse proxies `/ws` in Vite dev and Nginx, and halts reconnection on `SESSION_ALREADY_ACTIVE` with an explicit resolution CTA.
 
 ## Archive
 <!-- Move finished version groups here as one-line summaries, e.g. "v1 shipped: F-01 to F-03." -->
