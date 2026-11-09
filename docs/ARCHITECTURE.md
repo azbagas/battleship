@@ -10,7 +10,7 @@ Online Battleship is built as a monorepo with a React + TypeScript single-page a
 | Layer | Choice | Why |
 |-------|--------|-----|
 | Language | TypeScript (Frontend), Go (Backend) | Type safety on the client; fast, simple concurrency and single-binary deployment on the server. |
-| Framework | React + Vite (Frontend), Go `net/http` + WebSocket library (`coder/websocket` or `gorilla/websocket`) | Lightweight SPA setup driven by server messages (Zustand or React Context + reducer); minimal backend overhead with one goroutine per connection. |
+| Framework | React + Vite (Frontend), Go `net/http` + WebSocket library (`github.com/coder/websocket`) | Lightweight SPA setup driven by server messages (Zustand or React Context + reducer); minimal backend overhead with one goroutine per connection. |
 | Database | SQLite via pure-Go driver (`modernc.org/sqlite`) | Zero-ops single-file persistence for finished game records without requiring CGO in Docker builds. |
 | Testing | Go `testing` (`-race`, injectable clock), Vitest + React Testing Library, Playwright | Exhaustive unit, timer, concurrency, and two-browser end-to-end verification. |
 | Hosting/Deploy | Docker Compose on a single VPS (Go backend container + Caddy/nginx reverse proxy) | Simple operations with TLS termination, static asset serving, and a mounted volume for the SQLite file. |

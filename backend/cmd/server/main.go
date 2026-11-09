@@ -11,6 +11,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/azbagas/battleship/backend/internal/lobby"
+	"github.com/azbagas/battleship/backend/internal/ws"
 )
 
 // HealthResponse represents the payload returned by the health check endpoint.
@@ -19,9 +22,13 @@ type HealthResponse struct {
 }
 
 // routes sets up and returns the HTTP mux for the server.
-func routes() http.Handler {
+func routes(registry *lobby.SessionRegistry) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthzHandler)
+
+	wsHandler := ws.NewHandler(registry)
+	mux.Handle("/ws", wsHandler)
+
 	return mux
 }
 
@@ -41,9 +48,10 @@ func main() {
 	}
 
 	addr := fmt.Sprintf(":%s", port)
+	sessionRegistry := lobby.NewSessionRegistry()
 	srv := &http.Server{
 		Addr:         addr,
-		Handler:      routes(),
+		Handler:      routes(sessionRegistry),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,

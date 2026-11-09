@@ -10,7 +10,7 @@ Blocked: nothing
 
 Known issues: none
 
-Next up: T-02 [F-01] Implement backend session registry, WebSocket handshake (`hello` / `hello.ok`), display name sanitization (1–20 trimmed chars, control chars stripped), and single-active-connection rule per session token.
+Next up: T-03 [F-01] Build frontend Home screen with display name input, `localStorage` persistence (`sessionToken`, `displayName`), WebSocket client wrapper, and automatic state restoration across page refreshes.
 
 <!-- Update this block at the end of every session. If it passes ~15 lines, move it to STATUS.md. -->
 
@@ -21,7 +21,7 @@ Next up: T-02 [F-01] Implement backend session registry, WebSocket handshake (`h
   Done when: `go test ./...`, frontend test/lint/build commands, and `GET /healthz` all succeed locally and via Docker Compose.
 
 ### F-01 Display Name & Session Identity
-- [ ] T-02 [F-01] Implement backend session registry, WebSocket handshake (`hello` / `hello.ok`), display name sanitization (1–20 trimmed chars, control chars stripped), and single-active-connection rule per session token.
+- [x] T-02 [F-01] Implement backend session registry, WebSocket handshake (`hello` / `hello.ok`), display name sanitization (1–20 trimmed chars, control chars stripped), and single-active-connection rule per session token.
   Done when: unit and WebSocket tests verify token issuance, session restoration on reconnect, name validation bounds, and rejection of a second concurrent connection with the same token.
 - [ ] T-03 [F-01] Build frontend Home screen with display name input, `localStorage` persistence (`sessionToken`, `displayName`), WebSocket client wrapper, and automatic state restoration across page refreshes.
   Done when: a player can enter a name, connect, refresh the browser, and remain recognized with the same session identity.
@@ -89,6 +89,7 @@ Next up: T-02 [F-01] Implement backend session registry, WebSocket handshake (`h
 <!-- Non-obvious choices made during implementation, with a date.
      Format: YYYY-MM-DD: what was decided and why. -->
 - 2026-11-09: Initial v1 defaults locked from PRD: 60s placement timer, 30s turn timer (auto-fires random untargeted cell on timeout; no AFK forfeit on repeated timeouts), 60s disconnect grace period, 10-room global cap (waiting + active), no timeout on pre-game ready-up, and second tab with same session token rejected.
+- 2026-11-09: T-02 implemented using `github.com/coder/websocket`; unrecognized session token in `hello` gracefully issues a new session with fresh tokens to handle server restarts seamlessly.
 
 ## Archive
 <!-- Move finished version groups here as one-line summaries, e.g. "v1 shipped: F-01 to F-03." -->
