@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -14,15 +15,34 @@ import (
 	"github.com/azbagas/battleship/backend/internal/lobby"
 )
 
+// wsSender serializes outgoing WebSocket writes for a single client connection.
+type wsSender struct {
+	mu   sync.Mutex
+	conn *websocket.Conn
+	ctx  context.Context
+}
+
+// Send formats and transmits an outbound message envelope.
+func (s *wsSender) Send(msgType string, payload any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return writeJSON(s.ctx, s.conn, OutboundMessage{
+		Type:    MessageType(msgType),
+		Payload: payload,
+	})
+}
+
 // Handler manages WebSocket upgrades, handshake, and message dispatch.
 type Handler struct {
 	registry *lobby.SessionRegistry
+	lobby    *lobby.LobbyManager
 }
 
-// NewHandler constructs a WebSocket Handler backed by the given SessionRegistry.
-func NewHandler(registry *lobby.SessionRegistry) *Handler {
+// NewHandler constructs a WebSocket Handler backed by SessionRegistry and LobbyManager.
+func NewHandler(registry *lobby.SessionRegistry, lobbyMgr *lobby.LobbyManager) *Handler {
 	return &Handler{
 		registry: registry,
+		lobby:    lobbyMgr,
 	}
 }
 
@@ -36,13 +56,10 @@ func writeJSON(ctx context.Context, conn *websocket.Conn, v any) error {
 }
 
 // sendError sends a structured error envelope to the client.
-func sendError(ctx context.Context, conn *websocket.Conn, code string, message string) error {
-	return writeJSON(ctx, conn, OutboundMessage{
-		Type: TypeError,
-		Payload: ErrorPayload{
-			Code:    code,
-			Message: message,
-		},
+func sendError(sender *wsSender, code string, message string) error {
+	return sender.Send(string(TypeError), ErrorPayload{
+		Code:    code,
+		Message: message,
 	})
 }
 
@@ -59,18 +76,37 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close(websocket.StatusNormalClosure, "connection closed")
 	}()
 
+	sender := &wsSender{conn: conn, ctx: r.Context()}
+
 	// Enforce 5-second deadline for the initial hello handshake.
 	handshakeCtx, cancelHandshake := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancelHandshake()
 
-	player, err := h.handleHandshake(handshakeCtx, conn)
+	player, err := h.handleHandshake(handshakeCtx, conn, sender)
 	if err != nil {
 		// Handshake failed; error already written to client if possible, close and exit.
 		return
 	}
 
-	// Handshake succeeded: detach session when this connection terminates.
-	defer h.registry.DetachConnection(player.SessionToken)
+	// Register connection sender with lobby manager.
+	h.lobby.RegisterConnection(player.ID, sender)
+
+	// Detach connection and clean up lobby state when this connection terminates.
+	defer func() {
+		h.lobby.UnsubscribeFromLobby(player.ID)
+		h.lobby.UnregisterConnection(player.ID)
+		h.lobby.HandleDisconnect(player.ID)
+		h.registry.DetachConnection(player.SessionToken)
+	}()
+
+	// Check if player has an active room to restore.
+	currentRoomID, _ := h.registry.GetPlayerRoom(player.ID)
+	var restoredState any
+	if currentRoomID != "" {
+		if room, _ := h.lobby.HandleReconnect(player.ID); room != nil {
+			restoredState = room
+		}
+	}
 
 	// Send hello.ok with player identity and restoredState.
 	helloOK := OutboundMessage{
@@ -79,12 +115,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			PlayerID:      player.ID,
 			SessionToken:  player.SessionToken,
 			DisplayName:   player.DisplayName,
-			RestoredState: nil,
+			RestoredState: restoredState,
 		},
 	}
-	if err := writeJSON(r.Context(), conn, helloOK); err != nil {
+	if err := sender.Send(string(TypeHelloOK), helloOK.Payload); err != nil {
 		slog.Error("failed to write hello.ok", "error", err)
 		return
+	}
+
+	// If player is not restored into an active room, place them in the lobby.
+	if restoredState == nil {
+		h.lobby.SubscribeToLobby(player.ID)
+		snapshot := h.lobby.GetLobbySnapshot()
+		if err := sender.Send(string(TypeLobbySnapshot), snapshot); err != nil {
+			slog.Error("failed to write lobby.snapshot", "error", err)
+			return
+		}
 	}
 
 	// Message pump loop: read messages until disconnection.
@@ -100,45 +146,85 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		var inbound InboundMessage
 		if err := json.Unmarshal(msgBytes, &inbound); err != nil {
-			_ = sendError(r.Context(), conn, ErrCodeBadRequest, "Malformed message JSON")
+			_ = sendError(sender, ErrCodeBadRequest, "Malformed message JSON")
 			continue
 		}
 
-		// Dispatched in future tasks (T-04 lobby, T-06 ready-up, T-09 placement, T-12 battle).
+		switch inbound.Type {
+		case TypeLobbyCreate:
+			if _, err := h.lobby.CreateRoom(player.ID); err != nil {
+				h.handleLobbyError(sender, err)
+			}
+		case TypeLobbyCancel:
+			if err := h.lobby.CancelRoom(player.ID); err != nil {
+				h.handleLobbyError(sender, err)
+			}
+		case TypeLobbyJoin:
+			var joinPayload LobbyJoinPayload
+			if err := json.Unmarshal(inbound.Payload, &joinPayload); err != nil || joinPayload.RoomID == "" {
+				_ = sendError(sender, ErrCodeBadRequest, "Invalid join payload: roomId is required")
+				continue
+			}
+			if _, err := h.lobby.JoinRoom(player.ID, joinPayload.RoomID); err != nil {
+				h.handleLobbyError(sender, err)
+			}
+		default:
+			// Dispatched in future tasks (T-06 ready-up, T-09 placement, T-12 battle).
+		}
+	}
+}
+
+// handleLobbyError translates lobby errors into protocol error codes.
+func (h *Handler) handleLobbyError(sender *wsSender, err error) {
+	switch {
+	case errors.Is(err, lobby.ErrRoomCapReached):
+		_ = sendError(sender, ErrCodeRoomCapReached, err.Error())
+	case errors.Is(err, lobby.ErrAlreadyInRoom):
+		_ = sendError(sender, ErrCodeAlreadyInRoom, err.Error())
+	case errors.Is(err, lobby.ErrRoomNotFound):
+		_ = sendError(sender, ErrCodeRoomNotFound, err.Error())
+	case errors.Is(err, lobby.ErrRoomNotAvailable):
+		_ = sendError(sender, ErrCodeRoomNotAvailable, err.Error())
+	case errors.Is(err, lobby.ErrNotInWaitingRoom):
+		_ = sendError(sender, ErrCodeNotInWaitingRoom, err.Error())
+	case errors.Is(err, lobby.ErrCannotJoinOwnRoom):
+		_ = sendError(sender, ErrCodeCannotJoinOwnRoom, err.Error())
+	default:
+		_ = sendError(sender, ErrCodeBadRequest, err.Error())
 	}
 }
 
 // handleHandshake reads and processes the required hello handshake.
-func (h *Handler) handleHandshake(ctx context.Context, conn *websocket.Conn) (*lobby.Player, error) {
+func (h *Handler) handleHandshake(ctx context.Context, conn *websocket.Conn, sender *wsSender) (*lobby.Player, error) {
 	typ, msgBytes, err := conn.Read(ctx)
 	if err != nil {
-		_ = sendError(ctx, conn, ErrCodeInvalidHandshake, "Handshake timed out or failed to read")
+		_ = sendError(sender, ErrCodeInvalidHandshake, "Handshake timed out or failed to read")
 		_ = conn.Close(websocket.StatusPolicyViolation, "handshake timeout")
 		return nil, fmt.Errorf("read handshake: %w", err)
 	}
 
 	if typ != websocket.MessageText {
-		_ = sendError(ctx, conn, ErrCodeInvalidHandshake, "Expected text frame")
+		_ = sendError(sender, ErrCodeInvalidHandshake, "Expected text frame")
 		_ = conn.Close(websocket.StatusPolicyViolation, "expected text frame")
 		return nil, errors.New("expected text frame")
 	}
 
 	var inbound InboundMessage
 	if err := json.Unmarshal(msgBytes, &inbound); err != nil {
-		_ = sendError(ctx, conn, ErrCodeBadRequest, "Malformed message JSON")
+		_ = sendError(sender, ErrCodeBadRequest, "Malformed message JSON")
 		_ = conn.Close(websocket.StatusPolicyViolation, "malformed JSON")
 		return nil, fmt.Errorf("unmarshal handshake: %w", err)
 	}
 
 	if inbound.Type != TypeHello {
-		_ = sendError(ctx, conn, ErrCodeInvalidHandshake, "First message must be hello")
+		_ = sendError(sender, ErrCodeInvalidHandshake, "First message must be hello")
 		_ = conn.Close(websocket.StatusPolicyViolation, "expected hello")
 		return nil, errors.New("expected hello message")
 	}
 
 	var payload HelloPayload
 	if err := json.Unmarshal(inbound.Payload, &payload); err != nil {
-		_ = sendError(ctx, conn, ErrCodeBadRequest, "Malformed hello payload")
+		_ = sendError(sender, ErrCodeBadRequest, "Malformed hello payload")
 		_ = conn.Close(websocket.StatusPolicyViolation, "malformed hello payload")
 		return nil, fmt.Errorf("unmarshal hello payload: %w", err)
 	}
@@ -149,7 +235,7 @@ func (h *Handler) handleHandshake(ctx context.Context, conn *websocket.Conn) (*l
 		// Attempt to attach to existing session
 		attached, attachErr := h.registry.AttachConnection(payload.SessionToken)
 		if errors.Is(attachErr, lobby.ErrSessionAlreadyActive) {
-			_ = sendError(ctx, conn, ErrCodeSessionAlreadyActive, "Session is already active in another connection")
+			_ = sendError(sender, ErrCodeSessionAlreadyActive, "Session is already active in another connection")
 			_ = conn.Close(websocket.StatusPolicyViolation, "session already active")
 			return nil, lobby.ErrSessionAlreadyActive
 		}
@@ -158,13 +244,13 @@ func (h *Handler) handleHandshake(ctx context.Context, conn *websocket.Conn) (*l
 			// Unknown token (e.g., server restart) -> issue fresh session
 			newPlayer, createErr := h.registry.CreatePlayer(payload.Name)
 			if createErr != nil {
-				_ = sendError(ctx, conn, ErrCodeInvalidName, createErr.Error())
+				_ = sendError(sender, ErrCodeInvalidName, createErr.Error())
 				_ = conn.Close(websocket.StatusPolicyViolation, "invalid display name")
 				return nil, createErr
 			}
 			player = newPlayer
 		} else if attachErr != nil {
-			_ = sendError(ctx, conn, ErrCodeBadRequest, attachErr.Error())
+			_ = sendError(sender, ErrCodeBadRequest, attachErr.Error())
 			_ = conn.Close(websocket.StatusPolicyViolation, "failed to attach session")
 			return nil, attachErr
 		} else {
@@ -183,7 +269,7 @@ func (h *Handler) handleHandshake(ctx context.Context, conn *websocket.Conn) (*l
 		// No session token provided -> create fresh session
 		newPlayer, createErr := h.registry.CreatePlayer(payload.Name)
 		if createErr != nil {
-			_ = sendError(ctx, conn, ErrCodeInvalidName, createErr.Error())
+			_ = sendError(sender, ErrCodeInvalidName, createErr.Error())
 			_ = conn.Close(websocket.StatusPolicyViolation, "invalid display name")
 			return nil, createErr
 		}
@@ -192,4 +278,3 @@ func (h *Handler) handleHandshake(ctx context.Context, conn *websocket.Conn) (*l
 
 	return player, nil
 }
-

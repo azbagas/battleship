@@ -22,11 +22,11 @@ type HealthResponse struct {
 }
 
 // routes sets up and returns the HTTP mux for the server.
-func routes(registry *lobby.SessionRegistry) http.Handler {
+func routes(registry *lobby.SessionRegistry, lobbyMgr *lobby.LobbyManager) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthzHandler)
 
-	wsHandler := ws.NewHandler(registry)
+	wsHandler := ws.NewHandler(registry, lobbyMgr)
 	mux.Handle("/ws", wsHandler)
 
 	return mux
@@ -49,9 +49,10 @@ func main() {
 
 	addr := fmt.Sprintf(":%s", port)
 	sessionRegistry := lobby.NewSessionRegistry()
+	lobbyManager := lobby.NewLobbyManager(sessionRegistry)
 	srv := &http.Server{
 		Addr:         addr,
-		Handler:      routes(sessionRegistry),
+		Handler:      routes(sessionRegistry, lobbyManager),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,

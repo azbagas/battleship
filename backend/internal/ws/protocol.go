@@ -6,9 +6,15 @@ import "encoding/json"
 type MessageType string
 
 const (
-	TypeHello   MessageType = "hello"
-	TypeHelloOK MessageType = "hello.ok"
-	TypeError   MessageType = "error"
+	TypeHello         MessageType = "hello"
+	TypeHelloOK       MessageType = "hello.ok"
+	TypeError         MessageType = "error"
+	TypeLobbyCreate   MessageType = "lobby.create"
+	TypeLobbyCancel   MessageType = "lobby.cancel"
+	TypeLobbyJoin     MessageType = "lobby.join"
+	TypeLobbySnapshot MessageType = "lobby.snapshot"
+	TypeLobbyUpdate   MessageType = "lobby.update"
+	TypeRoomState     MessageType = "room.state"
 )
 
 // InboundMessage represents a received client JSON envelope.
@@ -43,11 +49,21 @@ type ErrorPayload struct {
 	Message string `json:"message"`
 }
 
+// LobbyJoinPayload contains the target room ID when joining a room.
+type LobbyJoinPayload struct {
+	RoomID string `json:"roomId"`
+}
+
 // Standard protocol error codes.
 const (
 	ErrCodeInvalidHandshake     = "INVALID_HANDSHAKE"
 	ErrCodeInvalidName          = "INVALID_NAME"
 	ErrCodeSessionAlreadyActive = "SESSION_ALREADY_ACTIVE"
 	ErrCodeBadRequest           = "BAD_REQUEST"
+	ErrCodeRoomCapReached       = "ROOM_CAP_REACHED"
+	ErrCodeAlreadyInRoom        = "ALREADY_IN_ROOM"
+	ErrCodeRoomNotFound         = "ROOM_NOT_FOUND"
+	ErrCodeRoomNotAvailable     = "ROOM_NOT_AVAILABLE"
+	ErrCodeNotInWaitingRoom     = "NOT_IN_WAITING_ROOM"
+	ErrCodeCannotJoinOwnRoom    = "CANNOT_JOIN_OWN_ROOM"
 )
-

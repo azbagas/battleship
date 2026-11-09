@@ -191,3 +191,45 @@ func (r *SessionRegistry) UpdateDisplayName(token string, newDisplayName string)
 	return nil
 }
 
+// SetCurrentRoom associates the player with an active room ID.
+func (r *SessionRegistry) SetCurrentRoom(playerID string, roomID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	player, ok := r.byID[playerID]
+	if !ok {
+		return ErrSessionNotFound
+	}
+
+	player.CurrentRoomID = roomID
+	return nil
+}
+
+// ClearCurrentRoom removes the player's active room association.
+func (r *SessionRegistry) ClearCurrentRoom(playerID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	player, ok := r.byID[playerID]
+	if !ok {
+		return ErrSessionNotFound
+	}
+
+	player.CurrentRoomID = ""
+	return nil
+}
+
+// GetPlayerRoom returns the player's current room ID, if any.
+func (r *SessionRegistry) GetPlayerRoom(playerID string) (string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	player, ok := r.byID[playerID]
+	if !ok {
+		return "", ErrSessionNotFound
+	}
+
+	return player.CurrentRoomID, nil
+}
+
+

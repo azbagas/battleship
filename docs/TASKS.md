@@ -10,7 +10,7 @@ Blocked: nothing
 
 Known issues: none
 
-Next up: T-04 [F-02] Implement backend in-memory lobby manager (`lobby.create`, `lobby.cancel`, atomic `lobby.join`, `lobby.snapshot`, `lobby.update`) enforcing one active game per player and the 10-room global cap.
+Next up: T-05 [F-02] Build frontend Lobby screen and Host Waiting Room UI showing live waiting rooms (oldest first with host name and wait duration), empty state, **Create game**, **Join**, **Cancel**, and disabled state when the 10-room cap is reached.
 
 <!-- Update this block at the end of every session. If it passes ~15 lines, move it to STATUS.md. -->
 
@@ -27,7 +27,7 @@ Next up: T-04 [F-02] Implement backend in-memory lobby manager (`lobby.create`, 
   Done when: a player can enter a name, connect, refresh the browser, and remain recognized with the same session identity.
 
 ### F-02 Live Public Lobby
-- [ ] T-04 [F-02] Implement backend in-memory lobby manager (`lobby.create`, `lobby.cancel`, atomic `lobby.join`, `lobby.snapshot`, `lobby.update`) enforcing one active game per player and the 10-room global cap.
+- [x] T-04 [F-02] Implement backend in-memory lobby manager (`lobby.create`, `lobby.cancel`, atomic `lobby.join`, `lobby.snapshot`, `lobby.update`) enforcing one active game per player and the 10-room global cap.
   Done when: unit and `-race` concurrency tests confirm real-time lobby broadcasts, atomic simultaneous joins (exactly one succeeds), host cancel, and 10-room cap enforcement.
 - [ ] T-05 [F-02] Build frontend Lobby screen and Host Waiting Room UI showing live waiting rooms (oldest first with host name and wait duration), empty state, **Create game**, **Join**, **Cancel**, and disabled state when the 10-room cap is reached.
   Done when: creating, cancelling, and joining rooms update live across two connected browsers without manual refresh.
@@ -91,6 +91,7 @@ Next up: T-04 [F-02] Implement backend in-memory lobby manager (`lobby.create`, 
 - 2026-11-09: Initial v1 defaults locked from PRD: 60s placement timer, 30s turn timer (auto-fires random untargeted cell on timeout; no AFK forfeit on repeated timeouts), 60s disconnect grace period, 10-room global cap (waiting + active), no timeout on pre-game ready-up, and second tab with same session token rejected.
 - 2026-11-09: T-02 implemented using `github.com/coder/websocket`; unrecognized session token in `hello` gracefully issues a new session with fresh tokens to handle server restarts seamlessly.
 - 2026-11-09: T-03 frontend implemented with React 19 context + WebSocket client wrapper; handles automatic session restoration from `localStorage`, reverse proxies `/ws` in Vite dev and Nginx, and halts reconnection on `SESSION_ALREADY_ACTIVE` with an explicit resolution CTA.
+- 2026-11-09: T-04 implemented with in-memory LobbyManager, thread-safe Clock abstraction, and mutex-serialized room transitions outside network I/O; snapshot & update broadcasts carry totalRooms & maxRooms to enforce and expose the 10-room global cap to clients.
 
 ## Archive
 <!-- Move finished version groups here as one-line summaries, e.g. "v1 shipped: F-01 to F-03." -->
