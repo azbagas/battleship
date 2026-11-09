@@ -53,6 +53,7 @@ Update docs in the same change as the code. Describe the current state, not hist
 - Naming: Go uses standard `MixedCaps` / `camelCase` with short, lowercase package names (`game`, `lobby`, `ws`, `store`); React components use `PascalCase.tsx` and hooks/utilities use `camelCase.ts`; WebSocket message types use `domain.action` dot notation (e.g., `lobby.create`, `battle.fire`).
 - Error handling: Go functions return explicit `error` values wrapped with context (`fmt.Errorf("...: %w", err)`); malformed or out-of-turn WebSocket messages must never panic or crash the process—reject them with a structured `{ "type": "error", "payload": { "code", "message" } }` message.
 - Comments: Document exported Go symbols and non-obvious state transitions or concurrency invariants; explain *why* rather than restating *what* the code does.
+- UI/UX: Follow guidelines in `.agents/skills/frontend-design` and `.agents/skills/ui-ux-pro-max` when styling and building frontend screens or components.
 
 ## Definition of Done
 Behavior matches the PRD "Done when", tests pass, lint is clean, the diff has no unrelated changes, and affected docs are updated.
