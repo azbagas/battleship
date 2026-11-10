@@ -26,6 +26,11 @@ describe('LobbyScreen', () => {
     isLeavingRoom: false,
     toggleReady: vi.fn(),
     leaveRoom: vi.fn(),
+    isFleetConfirmed: false,
+    isOpponentConfirmed: false,
+    ownFleet: [],
+    placementDeadline: null,
+    submitFleet: vi.fn(),
   }
 
   const defaultMockSession: SessionContextValue = {

@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import { RoomStatePayload, WaitingRoomView } from '../types/protocol'
+import { PlacedShip, RoomStatePayload, WaitingRoomView } from '../types/protocol'
 
 export interface ReadyState {
   hostReady: boolean
@@ -27,6 +27,13 @@ export interface LobbyContextValue {
   isLeavingRoom: boolean
   toggleReady: () => void
   leaveRoom: () => void
+
+  // Placement phase controls
+  isFleetConfirmed: boolean
+  isOpponentConfirmed: boolean
+  ownFleet: PlacedShip[]
+  placementDeadline: string | null
+  submitFleet: (ships: PlacedShip[]) => void
 }
 
 export const LobbyContext = createContext<LobbyContextValue | undefined>(undefined)

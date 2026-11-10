@@ -363,8 +363,10 @@ describe('App & Session Lifecycle', () => {
 
     // Placement screen is displayed
     await waitFor(() => {
-      expect(screen.getByText('Phase: Fleet Placement')).toBeInTheDocument()
-      expect(screen.getByText('Fleet Dock Initializing')).toBeInTheDocument()
+      expect(screen.getByText('Battleship Combat')).toBeInTheDocument()
+      expect(screen.getByText('Tactical Deployment Phase')).toBeInTheDocument()
+      expect(screen.getByText('Ocean Grid (10×10)')).toBeInTheDocument()
+      expect(screen.getByText('Fleet Dock')).toBeInTheDocument()
     })
   })
 })

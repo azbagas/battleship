@@ -54,6 +54,11 @@ describe('ReadyUpScreen', () => {
     isLeavingRoom: false,
     toggleReady: vi.fn(),
     leaveRoom: vi.fn(),
+    isFleetConfirmed: false,
+    isOpponentConfirmed: false,
+    ownFleet: [],
+    placementDeadline: null,
+    submitFleet: vi.fn(),
     ...overrides,
   })
 

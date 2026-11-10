@@ -10,7 +10,7 @@ Blocked: nothing
 
 Known issues: none
 
-Next up: T-08 [F-04] Implement pure `internal/game` board & fleet placement logic (10×10 grid, 5 standard ships, bounds/overlap validation, adjacent ships allowed, full random fleet generation, and partial auto-placement for unplaced ships).
+Next up: T-11 [F-05] Implement pure `internal/game` shot resolution (`miss`, `hit`, `sunk` with sunk ship type and cells), random first-player selection, random untargeted cell selector for auto-shots, win detection, and per-player filtered board views.
 
 <!-- Update this block at the end of every session. If it passes ~15 lines, move it to STATUS.md. -->
 
@@ -43,11 +43,11 @@ Next up: T-08 [F-04] Implement pure `internal/game` board & fleet placement logi
   Done when: two joined players can toggle ready states and only advance to placement once both have clicked **Ready**.
 
 ### F-04 Fleet Placement Phase
-- [ ] T-08 [F-04] Implement pure `internal/game` board & fleet placement logic (10×10 grid, 5 standard ships, bounds/overlap validation, adjacent ships allowed, full random fleet generation, and partial auto-placement for unplaced ships).
+- [x] T-08 [F-04] Implement pure `internal/game` board & fleet placement logic (10×10 grid, 5 standard ships, bounds/overlap validation, adjacent ships allowed, full random fleet generation, and partial auto-placement for unplaced ships).
   Done when: unit tests exhaustively cover valid/invalid placements, random fleet validity, and preserving already-placed ships when auto-placing remaining ships.
-- [ ] T-09 [F-04] Implement backend placement phase orchestration (`placement.submit`, `placement.ready`, `placement.opponentReady`) and the 60-second placement timer with automatic completion on timeout using an injectable clock.
+- [x] T-09 [F-04] Implement backend placement phase orchestration (`placement.submit`, `placement.ready`, `placement.opponentReady`) and the 60-second placement timer with automatic completion on timeout using an injectable clock.
   Done when: room timer tests verify valid fleet lock-in, rejection of invalid placements, opponent ready notification without leaking coordinates, and auto-placement when the 60s clock expires.
-- [ ] T-10 [F-04] Build frontend Placement screen with 10×10 grid, unplaced ship dock, desktop drag-and-drop, touch tap-to-select/tap-to-place, ship rotation, **Randomize**, **Confirm fleet**, 60s countdown, and opponent confirmed indicator.
+- [x] T-10 [F-04] Build frontend Placement screen with 10×10 grid, unplaced ship dock, desktop drag-and-drop, touch tap-to-select/tap-to-place, ship rotation, **Randomize**, **Confirm fleet**, 60s countdown, and opponent confirmed indicator.
   Done when: players on both desktop and touch viewports can place, move, rotate, randomize, and confirm fleets (or let the 60s timer auto-confirm) to enter battle.
 
 ### F-05 Turn-Based Battle Phase
@@ -101,6 +101,7 @@ Next up: T-08 [F-04] Implement pure `internal/game` board & fleet placement logi
 - 2026-11-10: Hardened `WebSocketClient.connect` to be idempotent for identical connection options and cleanly detach/close obsolete socket instances before opening new ones, preventing ghost socket timeouts and false session collision triggers under React StrictMode.
 - 2026-11-10: T-01b added root package.json orchestrator with `concurrently` to run backend and frontend simultaneously with color-coded logs and graceful SIGINT cleanup via `npm run dev`.
 - 2026-11-10: T-06 & T-07 implemented ready-up room phase with `room.ready`, `room.unready`, `room.readyState`, and `room.leave` / `game.leave`. Enforces departure rules (guest leaves/disconnect timeout returns room to waiting lobby with public lobby upsert; host leaves/disconnect timeout destroys room and returns guest to lobby; 60s disconnect grace period applies before timeout resolution). Mutual readiness automatically transitions the room to the placement phase and renders `PlacementPlaceholder`.
+- 2026-11-10: T-08, T-09, & T-10 implemented pure `internal/game` engine (10×10 grid, 5 standard ships, validation, random fleet generation, partial auto-placement preservation), backend placement orchestration (`placement.submit`, `placement.ready`, `placement.confirmed`, `placement.opponentReady`, 60-second placement timer with auto-completion on deadline), and frontend responsive Placement screen with desktop HTML5 drag-and-drop, mobile tap-to-place, rotation ('R' key/button), Randomize, and Confirm fleet. Coordinates are never leaked in opponent ready notifications.
 
 ## Archive
 <!-- Move finished version groups here as one-line summaries, e.g. "v1 shipped: F-01 to F-03." -->

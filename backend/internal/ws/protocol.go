@@ -1,6 +1,10 @@
 package ws
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/azbagas/battleship/backend/internal/game"
+)
 
 // MessageType represents the domain-action identifier of a WebSocket message.
 type MessageType string
@@ -17,9 +21,13 @@ const (
 	TypeRoomState      MessageType = "room.state"
 	TypeRoomReady      MessageType = "room.ready"
 	TypeRoomUnready    MessageType = "room.unready"
-	TypeRoomLeave      MessageType = "room.leave"
-	TypeGameLeave      MessageType = "game.leave"
-	TypeRoomReadyState MessageType = "room.readyState"
+	TypeRoomLeave              MessageType = "room.leave"
+	TypeGameLeave              MessageType = "game.leave"
+	TypeRoomReadyState         MessageType = "room.readyState"
+	TypePlacementSubmit        MessageType = "placement.submit"
+	TypePlacementReady         MessageType = "placement.ready"
+	TypePlacementOpponentReady MessageType = "placement.opponentReady"
+	TypePlacementConfirmed     MessageType = "placement.confirmed"
 )
 
 // InboundMessage represents a received client JSON envelope.
@@ -59,6 +67,23 @@ type LobbyJoinPayload struct {
 	RoomID string `json:"roomId"`
 }
 
+// PlacementSubmitPayload contains a player's proposed ship arrangement.
+type PlacementSubmitPayload struct {
+	Ships []game.PlacedShip `json:"ships"`
+}
+
+// PlacementConfirmedPayload confirms a player's locked-in fleet.
+type PlacementConfirmedPayload struct {
+	Confirmed bool              `json:"confirmed"`
+	Ships     []game.PlacedShip `json:"ships,omitempty"`
+	Auto      bool              `json:"auto,omitempty"`
+}
+
+// PlacementOpponentReadyPayload notifies a player that their opponent locked in their fleet.
+type PlacementOpponentReadyPayload struct {
+	RoomID string `json:"roomId"`
+}
+
 // Standard protocol error codes.
 const (
 	ErrCodeInvalidHandshake     = "INVALID_HANDSHAKE"
@@ -73,4 +98,7 @@ const (
 	ErrCodeCannotJoinOwnRoom    = "CANNOT_JOIN_OWN_ROOM"
 	ErrCodeNotInReadyUp         = "NOT_IN_READY_UP"
 	ErrCodeNotInRoom            = "NOT_IN_ROOM"
+	ErrCodeNotInPlacement       = "NOT_IN_PLACEMENT"
+	ErrCodeFleetAlreadyLocked   = "FLEET_ALREADY_LOCKED"
+	ErrCodeInvalidPlacement     = "INVALID_PLACEMENT"
 )

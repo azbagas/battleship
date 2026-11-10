@@ -5,6 +5,9 @@ import {
   HelloOKPayload,
   LobbySnapshotPayload,
   LobbyUpdatePayload,
+  PlacedShip,
+  PlacementConfirmedPayload,
+  PlacementOpponentReadyPayload,
   RoomReadyStatePayload,
   RoomStatePayload,
   WaitingRoomView,
@@ -45,6 +48,12 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
   const [isTogglingReady, setIsTogglingReady] = useState<boolean>(false)
   const [isLeavingRoom, setIsLeavingRoom] = useState<boolean>(false)
 
+  // Placement phase states
+  const [isFleetConfirmed, setIsFleetConfirmed] = useState<boolean>(false)
+  const [isOpponentConfirmed, setIsOpponentConfirmed] = useState<boolean>(false)
+  const [ownFleet, setOwnFleet] = useState<PlacedShip[]>([])
+  const [placementDeadline, setPlacementDeadline] = useState<string | null>(null)
+
   // Reset lobby state if session logs out or resets
   useEffect(() => {
     if (!session.player) {
@@ -58,6 +67,10 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       setReadyState(null)
       setIsTogglingReady(false)
       setIsLeavingRoom(false)
+      setIsFleetConfirmed(false)
+      setIsOpponentConfirmed(false)
+      setOwnFleet([])
+      setPlacementDeadline(null)
     }
   }, [session.player])
 
@@ -70,6 +83,18 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
           setActiveRoom(payload.restoredState as RoomStatePayload)
           if (typeof state.hostReady === 'boolean' && typeof state.guestReady === 'boolean') {
             setReadyState({ hostReady: state.hostReady, guestReady: state.guestReady })
+          }
+          if (state.placementDeadline) {
+            setPlacementDeadline(state.placementDeadline)
+          }
+          if (typeof state.fleetConfirmed === 'boolean') {
+            setIsFleetConfirmed(state.fleetConfirmed)
+          }
+          if (typeof state.opponentConfirmed === 'boolean') {
+            setIsOpponentConfirmed(state.opponentConfirmed)
+          }
+          if (Array.isArray(state.ownFleet)) {
+            setOwnFleet(state.ownFleet)
           }
         }
       }
@@ -90,6 +115,10 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       setIsCancelling(false)
       setIsLeavingRoom(false)
       setIsTogglingReady(false)
+      setIsFleetConfirmed(false)
+      setIsOpponentConfirmed(false)
+      setOwnFleet([])
+      setPlacementDeadline(null)
     })
 
     const unsubUpdate = client.onMessage<LobbyUpdatePayload>('lobby.update', (payload) => {
@@ -122,6 +151,18 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       if (typeof payload.hostReady === 'boolean' && typeof payload.guestReady === 'boolean') {
         setReadyState({ hostReady: payload.hostReady, guestReady: payload.guestReady })
       }
+      if (payload.placementDeadline) {
+        setPlacementDeadline(payload.placementDeadline)
+      }
+      if (typeof payload.fleetConfirmed === 'boolean') {
+        setIsFleetConfirmed(payload.fleetConfirmed)
+      }
+      if (typeof payload.opponentConfirmed === 'boolean') {
+        setIsOpponentConfirmed(payload.opponentConfirmed)
+      }
+      if (Array.isArray(payload.ownFleet)) {
+        setOwnFleet(payload.ownFleet)
+      }
       setIsCreating(false)
       setJoiningRoomId(null)
       setIsLeavingRoom(false)
@@ -133,6 +174,24 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       setReadyState({ hostReady: payload.hostReady, guestReady: payload.guestReady })
       setIsTogglingReady(false)
     })
+
+    const unsubPlacementConfirmed = client.onMessage<PlacementConfirmedPayload>(
+      'placement.confirmed',
+      (payload) => {
+        if (!payload) return
+        setIsFleetConfirmed(true)
+        if (Array.isArray(payload.ships)) {
+          setOwnFleet(payload.ships)
+        }
+      },
+    )
+
+    const unsubOpponentReady = client.onMessage<PlacementOpponentReadyPayload>(
+      'placement.opponentReady',
+      () => {
+        setIsOpponentConfirmed(true)
+      },
+    )
 
     const unsubError = client.onError((err: ErrorPayload) => {
       setIsCreating(false)
@@ -163,6 +222,15 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
         case ErrorCode.NotInReadyUp:
           setLobbyError('Room is not currently in ready-up phase.')
           break
+        case ErrorCode.NotInPlacement:
+          setLobbyError('Room is not currently in placement phase.')
+          break
+        case ErrorCode.FleetAlreadyLocked:
+          setLobbyError('Your fleet is already locked and confirmed.')
+          break
+        case ErrorCode.InvalidPlacement:
+          setLobbyError(err.message || 'Invalid fleet placement: check for overlaps or out-of-bounds.')
+          break
         default:
           // Other errors might be session-level, keep lobbyError null unless relevant
           break
@@ -175,6 +243,8 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       unsubUpdate()
       unsubRoomState()
       unsubReadyState()
+      unsubPlacementConfirmed()
+      unsubOpponentReady()
       unsubError()
     }
   }, [client])
@@ -243,6 +313,13 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
     setLobbyError(null)
   }, [])
 
+  const submitFleet = useCallback(
+    (ships: PlacedShip[]) => {
+      client.send('placement.submit', { ships })
+    },
+    [client],
+  )
+
   const value = useMemo(
     () => ({
       rooms,
@@ -263,6 +340,11 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       isLeavingRoom,
       toggleReady,
       leaveRoom,
+      isFleetConfirmed,
+      isOpponentConfirmed,
+      ownFleet,
+      placementDeadline,
+      submitFleet,
     }),
     [
       rooms,
@@ -283,6 +365,11 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       isLeavingRoom,
       toggleReady,
       leaveRoom,
+      isFleetConfirmed,
+      isOpponentConfirmed,
+      ownFleet,
+      placementDeadline,
+      submitFleet,
     ],
   )
 

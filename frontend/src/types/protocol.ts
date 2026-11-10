@@ -14,6 +14,10 @@ export type MessageType =
   | 'room.leave'
   | 'game.leave'
   | 'room.readyState'
+  | 'placement.submit'
+  | 'placement.ready'
+  | 'placement.opponentReady'
+  | 'placement.confirmed'
   | string
 
 export interface InboundMessage<T = unknown> {
@@ -74,6 +78,34 @@ export interface RoomPlayerView {
 
 export type RoomPhase = 'waiting' | 'ready-up' | 'placement' | 'battle' | 'finished'
 
+export type ShipType = 'carrier' | 'battleship' | 'cruiser' | 'submarine' | 'destroyer'
+export type Orientation = 'horizontal' | 'vertical'
+
+export interface Coord {
+  x: number // 0..9 (A-J)
+  y: number // 0..9 (1-10)
+}
+
+export interface PlacedShip {
+  type: ShipType
+  origin: Coord
+  orientation: Orientation
+}
+
+export interface PlacementSubmitPayload {
+  ships: PlacedShip[]
+}
+
+export interface PlacementConfirmedPayload {
+  confirmed: boolean
+  ships?: PlacedShip[]
+  auto?: boolean
+}
+
+export interface PlacementOpponentReadyPayload {
+  roomId: string
+}
+
 export interface RoomStatePayload {
   roomId: string
   phase: RoomPhase
@@ -84,6 +116,10 @@ export interface RoomStatePayload {
   hostReady?: boolean
   guestReady?: boolean
   createdAt: string
+  placementDeadline?: string
+  fleetConfirmed?: boolean
+  opponentConfirmed?: boolean
+  ownFleet?: PlacedShip[]
 }
 
 export interface RoomReadyStatePayload {
@@ -105,6 +141,9 @@ export const ErrorCode = {
   CannotJoinOwnRoom: 'CANNOT_JOIN_OWN_ROOM',
   NotInReadyUp: 'NOT_IN_READY_UP',
   NotInRoom: 'NOT_IN_ROOM',
+  NotInPlacement: 'NOT_IN_PLACEMENT',
+  FleetAlreadyLocked: 'FLEET_ALREADY_LOCKED',
+  InvalidPlacement: 'INVALID_PLACEMENT',
 } as const
 
 export type ErrorCodeType = (typeof ErrorCode)[keyof typeof ErrorCode] | string

@@ -11,6 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/azbagas/battleship/backend/internal/game"
 	"github.com/azbagas/battleship/backend/internal/lobby"
 )
 
@@ -789,5 +790,155 @@ func TestWebSocket_ReadyUp_HostLeave(t *testing.T) {
 	tGuest, _ := readEnvelope(t, ctx, connGuest)
 	if tGuest != TypeLobbySnapshot {
 		t.Fatalf("guest expected lobby.snapshot, got %s", tGuest)
+	}
+}
+
+func TestWebSocket_PlacementSubmitAndMutualConfirmation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	server, _, _ := setupTestServer(t)
+
+	connHost, _, _ := connectAndHandshake(t, ctx, server.URL, "HostAdmiral", "")
+	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
+
+	connGuest, _, _ := connectAndHandshake(t, ctx, server.URL, "GuestCaptain", "")
+	defer func() { _ = connGuest.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Host creates room
+	createMsg, _ := json.Marshal(OutboundMessage{Type: TypeLobbyCreate, Payload: struct{}{}})
+	_ = connHost.Write(ctx, websocket.MessageText, createMsg)
+	_, pBytes := readEnvelope(t, ctx, connHost)
+	var hostRoomState lobby.RoomStateView
+	_ = json.Unmarshal(pBytes, &hostRoomState)
+	roomID := hostRoomState.RoomID
+
+	// Drain guest lobby.update
+	_, _ = readEnvelope(t, ctx, connGuest)
+
+	// Guest joins
+	joinMsg, _ := json.Marshal(OutboundMessage{Type: TypeLobbyJoin, Payload: LobbyJoinPayload{RoomID: roomID}})
+	_ = connGuest.Write(ctx, websocket.MessageText, joinMsg)
+
+	// Drain room.state and room.readyState for both
+	_, _ = readEnvelope(t, ctx, connGuest)
+	_, _ = readEnvelope(t, ctx, connGuest)
+	_, _ = readEnvelope(t, ctx, connHost)
+	_, _ = readEnvelope(t, ctx, connHost)
+
+	// Both ready up
+	readyMsg, _ := json.Marshal(OutboundMessage{Type: TypeRoomReady, Payload: struct{}{}})
+	_ = connHost.Write(ctx, websocket.MessageText, readyMsg)
+	// Drain readyStates
+	_, _ = readEnvelope(t, ctx, connHost)
+	_, _ = readEnvelope(t, ctx, connGuest)
+
+	_ = connGuest.Write(ctx, websocket.MessageText, readyMsg)
+	// Drain readyStates
+	_, _ = readEnvelope(t, ctx, connHost)
+	_, _ = readEnvelope(t, ctx, connGuest)
+
+	// Both receive room.state with phase: placement
+	tHostPhase, pHState := readEnvelope(t, ctx, connHost)
+	if tHostPhase != TypeRoomState {
+		t.Fatalf("host expected room.state, got %s", tHostPhase)
+	}
+	var hPlacementState lobby.RoomStateView
+	_ = json.Unmarshal(pHState, &hPlacementState)
+	if hPlacementState.Phase != lobby.PhasePlacement || hPlacementState.PlacementDeadline == nil {
+		t.Fatalf("expected placement phase with deadline, got phase=%s, deadline=%v", hPlacementState.Phase, hPlacementState.PlacementDeadline)
+	}
+
+	tGuestPhase, pGState := readEnvelope(t, ctx, connGuest)
+	if tGuestPhase != TypeRoomState {
+		t.Fatalf("guest expected room.state, got %s", tGuestPhase)
+	}
+	var gPlacementState lobby.RoomStateView
+	_ = json.Unmarshal(pGState, &gPlacementState)
+	if gPlacementState.Phase != lobby.PhasePlacement {
+		t.Fatalf("expected placement phase for guest, got %s", gPlacementState.Phase)
+	}
+
+	// Host submits valid fleet
+	hostFleet := []game.PlacedShip{
+		{Type: game.ShipCarrier, Origin: game.Coord{X: 0, Y: 0}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipBattleship, Origin: game.Coord{X: 0, Y: 1}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipCruiser, Origin: game.Coord{X: 0, Y: 2}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipSubmarine, Origin: game.Coord{X: 0, Y: 3}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipDestroyer, Origin: game.Coord{X: 0, Y: 4}, Orientation: game.OrientationHorizontal},
+	}
+	submitMsg, _ := json.Marshal(OutboundMessage{
+		Type:    TypePlacementSubmit,
+		Payload: PlacementSubmitPayload{Ships: hostFleet},
+	})
+	_ = connHost.Write(ctx, websocket.MessageText, submitMsg)
+
+	// Host receives placement.confirmed
+	tHConf, pHConf := readEnvelope(t, ctx, connHost)
+	if tHConf != TypePlacementConfirmed {
+		t.Fatalf("host expected placement.confirmed, got %s", tHConf)
+	}
+	var hConf PlacementConfirmedPayload
+	_ = json.Unmarshal(pHConf, &hConf)
+	if !hConf.Confirmed || len(hConf.Ships) != 5 {
+		t.Fatalf("expected 5 confirmed ships for host, got %+v", hConf)
+	}
+
+	// Guest receives placement.opponentReady (and NO ship coordinates!)
+	tGOpp, pGOpp := readEnvelope(t, ctx, connGuest)
+	if tGOpp != TypePlacementOpponentReady {
+		t.Fatalf("guest expected placement.opponentReady, got %s", tGOpp)
+	}
+	var oppReadyMap map[string]any
+	_ = json.Unmarshal(pGOpp, &oppReadyMap)
+	if _, leaked := oppReadyMap["ships"]; leaked {
+		t.Fatal("SECURITY LEAK: guest received host ship coordinates in placement.opponentReady!")
+	}
+
+	// Guest submits valid fleet
+	guestFleet := []game.PlacedShip{
+		{Type: game.ShipCarrier, Origin: game.Coord{X: 5, Y: 0}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipBattleship, Origin: game.Coord{X: 5, Y: 1}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipCruiser, Origin: game.Coord{X: 5, Y: 2}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipSubmarine, Origin: game.Coord{X: 5, Y: 3}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipDestroyer, Origin: game.Coord{X: 5, Y: 4}, Orientation: game.OrientationHorizontal},
+	}
+	submitMsgGuest, _ := json.Marshal(OutboundMessage{
+		Type:    TypePlacementSubmit,
+		Payload: PlacementSubmitPayload{Ships: guestFleet},
+	})
+	_ = connGuest.Write(ctx, websocket.MessageText, submitMsgGuest)
+
+	// Guest receives placement.confirmed
+	tGConf, _ := readEnvelope(t, ctx, connGuest)
+	if tGConf != TypePlacementConfirmed {
+		t.Fatalf("guest expected placement.confirmed, got %s", tGConf)
+	}
+
+	// Host receives placement.opponentReady
+	tHOpp, _ := readEnvelope(t, ctx, connHost)
+	if tHOpp != TypePlacementOpponentReady {
+		t.Fatalf("host expected placement.opponentReady, got %s", tHOpp)
+	}
+
+	// Both receive room.state transitioning to PhaseBattle
+	tHBattle, pHBattle := readEnvelope(t, ctx, connHost)
+	if tHBattle != TypeRoomState {
+		t.Fatalf("host expected room.state battle transition, got %s", tHBattle)
+	}
+	var hBattleState lobby.RoomStateView
+	_ = json.Unmarshal(pHBattle, &hBattleState)
+	if hBattleState.Phase != lobby.PhaseBattle {
+		t.Fatalf("expected host battle phase, got %s", hBattleState.Phase)
+	}
+
+	tGBattle, pGBattle := readEnvelope(t, ctx, connGuest)
+	if tGBattle != TypeRoomState {
+		t.Fatalf("guest expected room.state battle transition, got %s", tGBattle)
+	}
+	var gBattleState lobby.RoomStateView
+	_ = json.Unmarshal(pGBattle, &gBattleState)
+	if gBattleState.Phase != lobby.PhaseBattle {
+		t.Fatalf("expected guest battle phase, got %s", gBattleState.Phase)
 	}
 }

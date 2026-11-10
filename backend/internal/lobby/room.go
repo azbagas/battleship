@@ -2,6 +2,8 @@ package lobby
 
 import (
 	"time"
+
+	"github.com/azbagas/battleship/backend/internal/game"
 )
 
 // RoomPhase represents the lifecycle stage of a game room.
@@ -27,6 +29,12 @@ type Room struct {
 	DisconnectTimer      Timer
 	HostDisconnectTimer  Timer
 	GuestDisconnectTimer Timer
+	PlacementDeadline    time.Time
+	PlacementTimer       Timer
+	HostFleet            []game.PlacedShip
+	GuestFleet           []game.PlacedShip
+	HostFleetConfirmed   bool
+	GuestFleetConfirmed  bool
 }
 
 // WaitingRoomView describes an open waiting room visible to lobby browsers.
@@ -51,15 +59,19 @@ type RoomReadyStateView struct {
 
 // RoomStateView is sent to players upon entering or updating a room.
 type RoomStateView struct {
-	RoomID       string          `json:"roomId"`
-	Phase        RoomPhase       `json:"phase"`
-	Role         string          `json:"role"` // "host" or "guest"
-	OpponentName string          `json:"opponentName,omitempty"`
-	Host         RoomPlayerView  `json:"host"`
-	Guest        *RoomPlayerView `json:"guest,omitempty"`
-	HostReady    bool            `json:"hostReady"`
-	GuestReady   bool            `json:"guestReady"`
-	CreatedAt    time.Time       `json:"createdAt"`
+	RoomID            string            `json:"roomId"`
+	Phase             RoomPhase         `json:"phase"`
+	Role              string            `json:"role"` // "host" or "guest"
+	OpponentName      string            `json:"opponentName,omitempty"`
+	Host              RoomPlayerView    `json:"host"`
+	Guest             *RoomPlayerView   `json:"guest,omitempty"`
+	HostReady         bool              `json:"hostReady"`
+	GuestReady        bool              `json:"guestReady"`
+	CreatedAt         time.Time         `json:"createdAt"`
+	PlacementDeadline *time.Time        `json:"placementDeadline,omitempty"`
+	FleetConfirmed    bool              `json:"fleetConfirmed"`
+	OpponentConfirmed bool              `json:"opponentConfirmed"`
+	OwnFleet          []game.PlacedShip `json:"ownFleet,omitempty"`
 }
 
 // LobbySnapshotPayload represents the full list of waiting rooms sent on entry.

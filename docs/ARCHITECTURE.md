@@ -93,7 +93,7 @@ All messages are JSON envelopes of the form `{ "type": string, "payload": object
   - `hello.ok` (`playerId`, `sessionToken`, `restoredState`)
   - `lobby.snapshot` (waiting rooms list), `lobby.update` (room added or removed)
   - `room.state` (`phase`, `opponentName`, `deadlines`), `room.readyState` (`hostReady`, `guestReady`)
-  - `placement.opponentReady`
+  - `placement.confirmed` (`confirmed`, `ships?`, `auto?`), `placement.opponentReady` (`roomId`)
   - `battle.start` (`firstPlayerId`), `battle.shotResult` (`by`, `cell`, `result`, `sunkShip?`, `auto?`), `battle.turn` (`turnPlayerId`, `deadline`)
   - `opponent.disconnected` (`graceDeadline`), `opponent.reconnected`
   - `game.over` (`winnerPlayerId`, `reason`)

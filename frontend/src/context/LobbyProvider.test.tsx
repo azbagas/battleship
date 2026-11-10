@@ -342,5 +342,60 @@ describe('LobbyProvider', () => {
     expect(result.current.isCancelling).toBe(false)
     expect(result.current.rooms).toEqual([])
   })
+
+  it('handles placement phase orchestration messages and submitFleet', () => {
+    const { result } = renderHook(() => useLobby(), { wrapper })
+    const roomStateHandler = messageHandlers.get('room.state')
+    const placementConfirmedHandler = messageHandlers.get('placement.confirmed')
+    const opponentReadyHandler = messageHandlers.get('placement.opponentReady')
+
+    // Room enters placement
+    act(() => {
+      roomStateHandler!({
+        roomId: 'r_place1',
+        phase: 'placement',
+        role: 'host',
+        host: { id: 'p1', name: 'Admiral Nimitz' },
+        guest: { id: 'p2', name: 'Commander Spock' },
+        opponentName: 'Commander Spock',
+        placementDeadline: '2026-11-10T12:01:00Z',
+        fleetConfirmed: false,
+        opponentConfirmed: false,
+        createdAt: '2026-11-10T12:00:00Z',
+      })
+    })
+
+    expect(result.current.activeRoom?.phase).toBe('placement')
+    expect(result.current.placementDeadline).toBe('2026-11-10T12:01:00Z')
+    expect(result.current.isFleetConfirmed).toBe(false)
+    expect(result.current.isOpponentConfirmed).toBe(false)
+
+    // Player submits fleet
+    const testShips = [
+      { type: 'destroyer' as const, origin: { x: 0, y: 0 }, orientation: 'horizontal' as const },
+    ]
+    act(() => {
+      result.current.submitFleet(testShips)
+    })
+    expect(mockClient.send).toHaveBeenCalledWith('placement.submit', { ships: testShips })
+
+    // Server sends placement.confirmed
+    act(() => {
+      placementConfirmedHandler!({
+        confirmed: true,
+        ships: testShips,
+      })
+    })
+    expect(result.current.isFleetConfirmed).toBe(true)
+    expect(result.current.ownFleet).toEqual(testShips)
+
+    // Server sends placement.opponentReady
+    act(() => {
+      opponentReadyHandler!({
+        roomId: 'r_place1',
+      })
+    })
+    expect(result.current.isOpponentConfirmed).toBe(true)
+  })
 })
 

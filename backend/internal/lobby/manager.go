@@ -4,22 +4,29 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
+	mrand "math/rand"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/azbagas/battleship/backend/internal/game"
 )
 
 // Sentinel errors for lobby operations.
 var (
-	ErrRoomCapReached    = errors.New("maximum room capacity reached (10 rooms)")
-	ErrAlreadyInRoom     = errors.New("player already has an active room or game")
-	ErrRoomNotFound      = errors.New("room not found")
-	ErrRoomNotAvailable  = errors.New("game is no longer available")
-	ErrNotInWaitingRoom  = errors.New("player is not hosting a waiting room")
-	ErrCannotJoinOwnRoom = errors.New("cannot join your own room")
-	ErrNotInReadyUp      = errors.New("room is not in ready-up phase")
-	ErrNotInRoom         = errors.New("player is not in an active room")
+	ErrRoomCapReached     = errors.New("maximum room capacity reached (10 rooms)")
+	ErrAlreadyInRoom      = errors.New("player already has an active room or game")
+	ErrRoomNotFound       = errors.New("room not found")
+	ErrRoomNotAvailable   = errors.New("game is no longer available")
+	ErrNotInWaitingRoom   = errors.New("player is not hosting a waiting room")
+	ErrCannotJoinOwnRoom  = errors.New("cannot join your own room")
+	ErrNotInReadyUp       = errors.New("room is not in ready-up phase")
+	ErrNotInRoom          = errors.New("player is not in an active room")
+	ErrNotInPlacement     = errors.New("room is not in placement phase")
+	ErrFleetAlreadyLocked = errors.New("fleet is already confirmed and locked")
+	ErrInvalidPlacement   = errors.New("invalid fleet placement")
 )
 
 // ClientSender specifies the interface for transmitting messages to a connected player.
@@ -51,6 +58,13 @@ func WithDisconnectGrace(d time.Duration) Option {
 	}
 }
 
+// WithRNG sets a custom random number generator for deterministic placements in tests.
+func WithRNG(rng *mrand.Rand) Option {
+	return func(m *LobbyManager) {
+		m.rng = rng
+	}
+}
+
 // LobbyManager coordinates public lobby state, room lifecycles, and broadcasts.
 type LobbyManager struct {
 	mu               sync.RWMutex
@@ -61,6 +75,7 @@ type LobbyManager struct {
 	clock            Clock
 	maxRooms         int
 	disconnectGrace  time.Duration
+	rng              *mrand.Rand
 }
 
 // NewLobbyManager constructs a thread-safe LobbyManager.
@@ -430,6 +445,13 @@ func (m *LobbyManager) ReadyRoom(playerID string) error {
 	var hostPlacementState, guestPlacementState RoomStateView
 	if transitionToPlacement {
 		room.Phase = PhasePlacement
+		placementDeadline := m.clock.Now().Add(60 * time.Second)
+		room.PlacementDeadline = placementDeadline
+		roomID := room.ID
+		room.PlacementTimer = m.clock.AfterFunc(60*time.Second, func() {
+			m.expirePlacementTimer(roomID)
+		})
+
 		host, _ := m.registry.GetByID(hostID)
 		guest, _ := m.registry.GetByID(guestID)
 		hostName := "Host"
@@ -445,28 +467,30 @@ func (m *LobbyManager) ReadyRoom(playerID string) error {
 		guestView := RoomPlayerView{ID: guestID, Name: guestName}
 
 		hostPlacementState = RoomStateView{
-			RoomID:       room.ID,
-			Phase:        PhasePlacement,
-			Role:         "host",
-			OpponentName: guestName,
-			Host:         hostView,
-			Guest:        &guestView,
-			HostReady:    true,
-			GuestReady:   true,
-			CreatedAt:    room.CreatedAt,
+			RoomID:            room.ID,
+			Phase:             PhasePlacement,
+			Role:              "host",
+			OpponentName:      guestName,
+			Host:              hostView,
+			Guest:             &guestView,
+			HostReady:         true,
+			GuestReady:        true,
+			PlacementDeadline: &placementDeadline,
+			CreatedAt:         room.CreatedAt,
 		}
 		guestPlacementState = RoomStateView{
-			RoomID:       room.ID,
-			Phase:        PhasePlacement,
-			Role:         "guest",
-			OpponentName: hostName,
-			Host:         hostView,
-			Guest:        &guestView,
-			HostReady:    true,
-			GuestReady:   true,
-			CreatedAt:    room.CreatedAt,
+			RoomID:            room.ID,
+			Phase:             PhasePlacement,
+			Role:              "guest",
+			OpponentName:      hostName,
+			Host:              hostView,
+			Guest:             &guestView,
+			HostReady:         true,
+			GuestReady:        true,
+			PlacementDeadline: &placementDeadline,
+			CreatedAt:         room.CreatedAt,
 		}
-		slog.Info("both players ready, room transitioned to placement", "roomId", room.ID, "hostId", hostID, "guestId", guestID)
+		slog.Info("both players ready, room transitioned to placement", "roomId", room.ID, "hostId", hostID, "guestId", guestID, "deadline", placementDeadline)
 	}
 
 	m.mu.Unlock()
@@ -540,6 +564,274 @@ func (m *LobbyManager) UnreadyRoom(playerID string) error {
 	}
 
 	return nil
+}
+
+// SubmitFleet locks in a player's ship placements during PhasePlacement.
+func (m *LobbyManager) SubmitFleet(playerID string, ships []game.PlacedShip) error {
+	m.mu.Lock()
+	currentRoomID, err := m.registry.GetPlayerRoom(playerID)
+	if err != nil || currentRoomID == "" {
+		m.mu.Unlock()
+		slog.Warn("submit fleet rejected: not in room", "playerId", playerID)
+		return ErrNotInRoom
+	}
+
+	room, ok := m.rooms[currentRoomID]
+	if !ok {
+		m.mu.Unlock()
+		slog.Warn("submit fleet rejected: room not found", "playerId", playerID, "roomId", currentRoomID)
+		return ErrRoomNotFound
+	}
+
+	if room.Phase != PhasePlacement {
+		phase := room.Phase
+		m.mu.Unlock()
+		slog.Warn("submit fleet rejected: not in placement phase", "playerId", playerID, "roomId", currentRoomID, "phase", phase)
+		return ErrNotInPlacement
+	}
+
+	isHost := playerID == room.HostPlayerID
+	isGuest := playerID == room.GuestPlayerID
+	if !isHost && !isGuest {
+		m.mu.Unlock()
+		return ErrNotInRoom
+	}
+
+	if (isHost && room.HostFleetConfirmed) || (isGuest && room.GuestFleetConfirmed) {
+		m.mu.Unlock()
+		slog.Warn("submit fleet rejected: fleet already locked", "playerId", playerID, "roomId", currentRoomID)
+		return ErrFleetAlreadyLocked
+	}
+
+	if err := game.ValidateFleet(ships); err != nil {
+		m.mu.Unlock()
+		slog.Warn("submit fleet rejected: invalid fleet", "playerId", playerID, "roomId", currentRoomID, "error", err)
+		return fmt.Errorf("%w: %w", ErrInvalidPlacement, err)
+	}
+
+	copied := make([]game.PlacedShip, len(ships))
+	copy(copied, ships)
+
+	var opponentID string
+	if isHost {
+		room.HostFleet = copied
+		room.HostFleetConfirmed = true
+		opponentID = room.GuestPlayerID
+	} else {
+		room.GuestFleet = copied
+		room.GuestFleetConfirmed = true
+		opponentID = room.HostPlayerID
+	}
+
+	slog.Info("player locked in fleet", "roomId", room.ID, "playerId", playerID, "isHost", isHost)
+
+	transitionToBattle := room.HostFleetConfirmed && room.GuestFleetConfirmed
+	var hostBattleState, guestBattleState RoomStateView
+	roomID := room.ID
+	hostID := room.HostPlayerID
+	guestID := room.GuestPlayerID
+
+	if transitionToBattle {
+		if room.PlacementTimer != nil {
+			room.PlacementTimer.Stop()
+			room.PlacementTimer = nil
+		}
+		room.Phase = PhaseBattle
+
+		host, _ := m.registry.GetByID(hostID)
+		guest, _ := m.registry.GetByID(guestID)
+		hostName := "Host"
+		if host != nil {
+			hostName = host.DisplayName
+		}
+		guestName := "Guest"
+		if guest != nil {
+			guestName = guest.DisplayName
+		}
+		hostView := RoomPlayerView{ID: hostID, Name: hostName}
+		guestView := RoomPlayerView{ID: guestID, Name: guestName}
+
+		hostBattleState = RoomStateView{
+			RoomID:            room.ID,
+			Phase:             PhaseBattle,
+			Role:              "host",
+			OpponentName:      guestName,
+			Host:              hostView,
+			Guest:             &guestView,
+			HostReady:         true,
+			GuestReady:        true,
+			FleetConfirmed:    true,
+			OpponentConfirmed: true,
+			OwnFleet:          room.HostFleet,
+			CreatedAt:         room.CreatedAt,
+		}
+		guestBattleState = RoomStateView{
+			RoomID:            room.ID,
+			Phase:             PhaseBattle,
+			Role:              "guest",
+			OpponentName:      hostName,
+			Host:              hostView,
+			Guest:             &guestView,
+			HostReady:         true,
+			GuestReady:        true,
+			FleetConfirmed:    true,
+			OpponentConfirmed: true,
+			OwnFleet:          room.GuestFleet,
+			CreatedAt:         room.CreatedAt,
+		}
+		slog.Info("both fleets confirmed, room transitioned to battle", "roomId", room.ID)
+	}
+
+	m.mu.Unlock()
+
+	// Notify submitting player of confirmation
+	m.send(playerID, "placement.confirmed", map[string]any{
+		"confirmed": true,
+		"ships":     copied,
+	})
+
+	// Notify opponent that player confirmed without leaking coordinates
+	if opponentID != "" {
+		m.send(opponentID, "placement.opponentReady", map[string]any{
+			"roomId": roomID,
+		})
+	}
+
+	// If battle started, broadcast battle state
+	if transitionToBattle {
+		m.send(hostID, "room.state", hostBattleState)
+		if guestID != "" {
+			m.send(guestID, "room.state", guestBattleState)
+		}
+	}
+
+	return nil
+}
+
+// expirePlacementTimer handles timeout of the 60s fleet placement phase.
+// Any unconfirmed player's remaining unplaced ships are auto-placed while keeping
+// already placed ships untouched. The room then transitions to PhaseBattle.
+func (m *LobbyManager) expirePlacementTimer(roomID string) {
+	m.mu.Lock()
+	room, ok := m.rooms[roomID]
+	if !ok || room.Phase != PhasePlacement {
+		m.mu.Unlock()
+		return
+	}
+
+	if room.PlacementTimer != nil {
+		room.PlacementTimer.Stop()
+		room.PlacementTimer = nil
+	}
+
+	rng := m.rng
+	if rng == nil {
+		rng = mrand.New(mrand.NewSource(m.clock.Now().UnixNano()))
+	}
+
+	hostID := room.HostPlayerID
+	guestID := room.GuestPlayerID
+	hostAutoPlaced := false
+	guestAutoPlaced := false
+
+	if !room.HostFleetConfirmed {
+		fleet, err := game.AutoPlaceRemaining(room.HostFleet, rng)
+		if err != nil {
+			fleet = game.GenerateRandomFleet(rng)
+		}
+		room.HostFleet = fleet
+		room.HostFleetConfirmed = true
+		hostAutoPlaced = true
+		slog.Info("placement timer expired, auto-placed host fleet", "roomId", roomID, "hostId", hostID)
+	}
+
+	if !room.GuestFleetConfirmed {
+		fleet, err := game.AutoPlaceRemaining(room.GuestFleet, rng)
+		if err != nil {
+			fleet = game.GenerateRandomFleet(rng)
+		}
+		room.GuestFleet = fleet
+		room.GuestFleetConfirmed = true
+		guestAutoPlaced = true
+		slog.Info("placement timer expired, auto-placed guest fleet", "roomId", roomID, "guestId", guestID)
+	}
+
+	room.Phase = PhaseBattle
+
+	host, _ := m.registry.GetByID(hostID)
+	guest, _ := m.registry.GetByID(guestID)
+	hostName := "Host"
+	if host != nil {
+		hostName = host.DisplayName
+	}
+	guestName := "Guest"
+	if guest != nil {
+		guestName = guest.DisplayName
+	}
+	hostView := RoomPlayerView{ID: hostID, Name: hostName}
+	guestView := RoomPlayerView{ID: guestID, Name: guestName}
+
+	hostBattleState := RoomStateView{
+		RoomID:            room.ID,
+		Phase:             PhaseBattle,
+		Role:              "host",
+		OpponentName:      guestName,
+		Host:              hostView,
+		Guest:             &guestView,
+		HostReady:         true,
+		GuestReady:        true,
+		FleetConfirmed:    true,
+		OpponentConfirmed: true,
+		OwnFleet:          room.HostFleet,
+		CreatedAt:         room.CreatedAt,
+	}
+	guestBattleState := RoomStateView{
+		RoomID:            room.ID,
+		Phase:             PhaseBattle,
+		Role:              "guest",
+		OpponentName:      hostName,
+		Host:              hostView,
+		Guest:             &guestView,
+		HostReady:         true,
+		GuestReady:        true,
+		FleetConfirmed:    true,
+		OpponentConfirmed: true,
+		OwnFleet:          room.GuestFleet,
+		CreatedAt:         room.CreatedAt,
+	}
+
+	hostFleet := room.HostFleet
+	guestFleet := room.GuestFleet
+
+	m.mu.Unlock()
+
+	// Notify auto-confirmed players of their final fleet
+	if hostAutoPlaced {
+		m.send(hostID, "placement.confirmed", map[string]any{
+			"confirmed": true,
+			"ships":     hostFleet,
+			"auto":      true,
+		})
+	}
+	if guestAutoPlaced && guestID != "" {
+		m.send(guestID, "placement.confirmed", map[string]any{
+			"confirmed": true,
+			"ships":     guestFleet,
+			"auto":      true,
+		})
+	}
+
+	// Notify both of opponent readiness
+	m.send(hostID, "placement.opponentReady", map[string]any{"roomId": roomID})
+	if guestID != "" {
+		m.send(guestID, "placement.opponentReady", map[string]any{"roomId": roomID})
+	}
+
+	// Broadcast battle room.state
+	m.send(hostID, "room.state", hostBattleState)
+	if guestID != "" {
+		m.send(guestID, "room.state", guestBattleState)
+	}
 }
 
 // LeaveRoom handles explicit departures from waiting or ready-up rooms.
@@ -720,14 +1012,14 @@ func (m *LobbyManager) HandleDisconnect(playerID string) {
 		})
 	}
 
-	// If room is in PhaseReadyUp, start the 60s disconnect grace timer for whichever player disconnected
-	if room.Phase == PhaseReadyUp {
+	// If room is in PhaseReadyUp or PhasePlacement, start the 60s disconnect grace timer for whichever player disconnected
+	if room.Phase == PhaseReadyUp || room.Phase == PhasePlacement {
 		roomID := room.ID
 		if room.HostPlayerID == playerID {
 			if room.HostDisconnectTimer != nil {
 				room.HostDisconnectTimer.Stop()
 			}
-			slog.Info("ready-up host disconnected, starting grace timer", "roomId", roomID, "hostId", playerID, "graceDuration", m.disconnectGrace.String())
+			slog.Info("room host disconnected, starting grace timer", "roomId", roomID, "hostId", playerID, "phase", room.Phase, "graceDuration", m.disconnectGrace.String())
 			room.HostDisconnectTimer = m.clock.AfterFunc(m.disconnectGrace, func() {
 				m.expireReadyUpPlayer(roomID, playerID, true)
 			})
@@ -735,7 +1027,7 @@ func (m *LobbyManager) HandleDisconnect(playerID string) {
 			if room.GuestDisconnectTimer != nil {
 				room.GuestDisconnectTimer.Stop()
 			}
-			slog.Info("ready-up guest disconnected, starting grace timer", "roomId", roomID, "guestId", playerID, "graceDuration", m.disconnectGrace.String())
+			slog.Info("room guest disconnected, starting grace timer", "roomId", roomID, "guestId", playerID, "phase", room.Phase, "graceDuration", m.disconnectGrace.String())
 			room.GuestDisconnectTimer = m.clock.AfterFunc(m.disconnectGrace, func() {
 				m.expireReadyUpPlayer(roomID, playerID, false)
 			})
@@ -832,7 +1124,7 @@ func (m *LobbyManager) HandleReconnect(playerID string) (*Room, error) {
 		}
 	}
 
-	if room.Phase == PhaseReadyUp {
+	if room.Phase == PhaseReadyUp || room.Phase == PhasePlacement {
 		if room.HostPlayerID == playerID && room.HostDisconnectTimer != nil {
 			room.HostDisconnectTimer.Stop()
 			room.HostDisconnectTimer = nil
@@ -880,6 +1172,19 @@ func (m *LobbyManager) HandleReconnect(playerID string) (*Room, error) {
 		HostReady:    room.HostReady,
 		GuestReady:   room.GuestReady,
 		CreatedAt:    room.CreatedAt,
+	}
+
+	if room.Phase == PhasePlacement {
+		stateView.PlacementDeadline = &room.PlacementDeadline
+		if playerID == room.HostPlayerID {
+			stateView.FleetConfirmed = room.HostFleetConfirmed
+			stateView.OpponentConfirmed = room.GuestFleetConfirmed
+			stateView.OwnFleet = room.HostFleet
+		} else {
+			stateView.FleetConfirmed = room.GuestFleetConfirmed
+			stateView.OpponentConfirmed = room.HostFleetConfirmed
+			stateView.OwnFleet = room.GuestFleet
+		}
 	}
 
 	var readyState *RoomReadyStateView

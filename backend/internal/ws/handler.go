@@ -187,6 +187,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err := h.lobby.LeaveRoom(player.ID); err != nil {
 				h.handleLobbyError(sender, player.ID, inbound.Type, err)
 			}
+		case TypePlacementSubmit, TypePlacementReady:
+			var submitPayload PlacementSubmitPayload
+			if len(inbound.Payload) > 0 && string(inbound.Payload) != "null" && string(inbound.Payload) != "{}" {
+				if err := json.Unmarshal(inbound.Payload, &submitPayload); err != nil {
+					slog.Warn("invalid placement payload", "playerId", player.ID, "error", err)
+					_ = sendError(sender, ErrCodeBadRequest, "Invalid placement payload: malformed ships data")
+					continue
+				}
+			}
+			if err := h.lobby.SubmitFleet(player.ID, submitPayload.Ships); err != nil {
+				h.handleLobbyError(sender, player.ID, inbound.Type, err)
+			}
 		default:
 			slog.Debug("unhandled message type", "playerId", player.ID, "type", inbound.Type)
 		}
@@ -213,6 +225,12 @@ func (h *Handler) handleLobbyError(sender *wsSender, playerID string, action Mes
 		code = ErrCodeNotInReadyUp
 	case errors.Is(err, lobby.ErrNotInRoom):
 		code = ErrCodeNotInRoom
+	case errors.Is(err, lobby.ErrNotInPlacement):
+		code = ErrCodeNotInPlacement
+	case errors.Is(err, lobby.ErrFleetAlreadyLocked):
+		code = ErrCodeFleetAlreadyLocked
+	case errors.Is(err, lobby.ErrInvalidPlacement):
+		code = ErrCodeInvalidPlacement
 	}
 	slog.Warn("lobby action rejected", "playerId", playerID, "action", string(action), "code", code, "error", err)
 	_ = sendError(sender, code, err.Error())
