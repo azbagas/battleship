@@ -27,6 +27,9 @@ var (
 	ErrNotInPlacement     = errors.New("room is not in placement phase")
 	ErrFleetAlreadyLocked = errors.New("fleet is already confirmed and locked")
 	ErrInvalidPlacement   = errors.New("invalid fleet placement")
+	ErrNotInBattle        = errors.New("room is not in battle phase")
+	ErrNotYourTurn        = errors.New("not your turn to fire")
+	ErrGameOver           = errors.New("game has already finished")
 )
 
 // ClientSender specifies the interface for transmitting messages to a connected player.
@@ -328,6 +331,14 @@ func (m *LobbyManager) JoinRoom(playerID string, roomID string) (*Room, error) {
 		room.GuestDisconnectTimer.Stop()
 		room.GuestDisconnectTimer = nil
 	}
+	if room.PlacementTimer != nil {
+		room.PlacementTimer.Stop()
+		room.PlacementTimer = nil
+	}
+	if room.TurnTimer != nil {
+		room.TurnTimer.Stop()
+		room.TurnTimer = nil
+	}
 
 	_ = m.registry.SetCurrentRoom(playerID, roomID)
 	delete(m.lobbySubscribers, playerID)
@@ -626,60 +637,16 @@ func (m *LobbyManager) SubmitFleet(playerID string, ships []game.PlacedShip) err
 	slog.Info("player locked in fleet", "roomId", room.ID, "playerId", playerID, "isHost", isHost)
 
 	transitionToBattle := room.HostFleetConfirmed && room.GuestFleetConfirmed
+	var firstPlayerID string
+	var turnDeadline time.Time
 	var hostBattleState, guestBattleState RoomStateView
 	roomID := room.ID
 	hostID := room.HostPlayerID
 	guestID := room.GuestPlayerID
 
 	if transitionToBattle {
-		if room.PlacementTimer != nil {
-			room.PlacementTimer.Stop()
-			room.PlacementTimer = nil
-		}
-		room.Phase = PhaseBattle
-
-		host, _ := m.registry.GetByID(hostID)
-		guest, _ := m.registry.GetByID(guestID)
-		hostName := "Host"
-		if host != nil {
-			hostName = host.DisplayName
-		}
-		guestName := "Guest"
-		if guest != nil {
-			guestName = guest.DisplayName
-		}
-		hostView := RoomPlayerView{ID: hostID, Name: hostName}
-		guestView := RoomPlayerView{ID: guestID, Name: guestName}
-
-		hostBattleState = RoomStateView{
-			RoomID:            room.ID,
-			Phase:             PhaseBattle,
-			Role:              "host",
-			OpponentName:      guestName,
-			Host:              hostView,
-			Guest:             &guestView,
-			HostReady:         true,
-			GuestReady:        true,
-			FleetConfirmed:    true,
-			OpponentConfirmed: true,
-			OwnFleet:          room.HostFleet,
-			CreatedAt:         room.CreatedAt,
-		}
-		guestBattleState = RoomStateView{
-			RoomID:            room.ID,
-			Phase:             PhaseBattle,
-			Role:              "guest",
-			OpponentName:      hostName,
-			Host:              hostView,
-			Guest:             &guestView,
-			HostReady:         true,
-			GuestReady:        true,
-			FleetConfirmed:    true,
-			OpponentConfirmed: true,
-			OwnFleet:          room.GuestFleet,
-			CreatedAt:         room.CreatedAt,
-		}
-		slog.Info("both fleets confirmed, room transitioned to battle", "roomId", room.ID)
+		firstPlayerID, turnDeadline, hostBattleState, guestBattleState = m.initBattleLocked(room)
+		slog.Info("both fleets confirmed, room transitioned to battle", "roomId", room.ID, "firstPlayerId", firstPlayerID)
 	}
 
 	m.mu.Unlock()
@@ -697,8 +664,22 @@ func (m *LobbyManager) SubmitFleet(playerID string, ships []game.PlacedShip) err
 		})
 	}
 
-	// If battle started, broadcast battle state
+	// If battle started, broadcast battle start, turn, and battle room.state
 	if transitionToBattle {
+		m.send(hostID, "battle.start", map[string]any{"firstPlayerId": firstPlayerID})
+		if guestID != "" {
+			m.send(guestID, "battle.start", map[string]any{"firstPlayerId": firstPlayerID})
+		}
+
+		turnPayload := map[string]any{
+			"turnPlayerId": firstPlayerID,
+			"deadline":     turnDeadline,
+		}
+		m.send(hostID, "battle.turn", turnPayload)
+		if guestID != "" {
+			m.send(guestID, "battle.turn", turnPayload)
+		}
+
 		m.send(hostID, "room.state", hostBattleState)
 		if guestID != "" {
 			m.send(guestID, "room.state", guestBattleState)
@@ -756,49 +737,7 @@ func (m *LobbyManager) expirePlacementTimer(roomID string) {
 		slog.Info("placement timer expired, auto-placed guest fleet", "roomId", roomID, "guestId", guestID)
 	}
 
-	room.Phase = PhaseBattle
-
-	host, _ := m.registry.GetByID(hostID)
-	guest, _ := m.registry.GetByID(guestID)
-	hostName := "Host"
-	if host != nil {
-		hostName = host.DisplayName
-	}
-	guestName := "Guest"
-	if guest != nil {
-		guestName = guest.DisplayName
-	}
-	hostView := RoomPlayerView{ID: hostID, Name: hostName}
-	guestView := RoomPlayerView{ID: guestID, Name: guestName}
-
-	hostBattleState := RoomStateView{
-		RoomID:            room.ID,
-		Phase:             PhaseBattle,
-		Role:              "host",
-		OpponentName:      guestName,
-		Host:              hostView,
-		Guest:             &guestView,
-		HostReady:         true,
-		GuestReady:        true,
-		FleetConfirmed:    true,
-		OpponentConfirmed: true,
-		OwnFleet:          room.HostFleet,
-		CreatedAt:         room.CreatedAt,
-	}
-	guestBattleState := RoomStateView{
-		RoomID:            room.ID,
-		Phase:             PhaseBattle,
-		Role:              "guest",
-		OpponentName:      hostName,
-		Host:              hostView,
-		Guest:             &guestView,
-		HostReady:         true,
-		GuestReady:        true,
-		FleetConfirmed:    true,
-		OpponentConfirmed: true,
-		OwnFleet:          room.GuestFleet,
-		CreatedAt:         room.CreatedAt,
-	}
+	firstPlayerID, turnDeadline, hostBattleState, guestBattleState := m.initBattleLocked(room)
 
 	hostFleet := room.HostFleet
 	guestFleet := room.GuestFleet
@@ -827,10 +766,428 @@ func (m *LobbyManager) expirePlacementTimer(roomID string) {
 		m.send(guestID, "placement.opponentReady", map[string]any{"roomId": roomID})
 	}
 
-	// Broadcast battle room.state
+	// Broadcast battle.start, battle.turn, and room.state
+	m.send(hostID, "battle.start", map[string]any{"firstPlayerId": firstPlayerID})
+	if guestID != "" {
+		m.send(guestID, "battle.start", map[string]any{"firstPlayerId": firstPlayerID})
+	}
+
+	turnPayload := map[string]any{
+		"turnPlayerId": firstPlayerID,
+		"deadline":     turnDeadline,
+	}
+	m.send(hostID, "battle.turn", turnPayload)
+	if guestID != "" {
+		m.send(guestID, "battle.turn", turnPayload)
+	}
+
 	m.send(hostID, "room.state", hostBattleState)
 	if guestID != "" {
 		m.send(guestID, "room.state", guestBattleState)
+	}
+}
+
+// initBattleLocked initializes the battle state for a room whose fleets are confirmed.
+// Must be called with m.mu locked.
+func (m *LobbyManager) initBattleLocked(room *Room) (string, time.Time, RoomStateView, RoomStateView) {
+	if room.PlacementTimer != nil {
+		room.PlacementTimer.Stop()
+		room.PlacementTimer = nil
+	}
+	room.Phase = PhaseBattle
+
+	room.HostBoard, _ = game.NewBoard(room.HostFleet)
+	room.GuestBoard, _ = game.NewBoard(room.GuestFleet)
+	room.ShotLog = make([]ShotRecord, 0)
+
+	rng := m.rng
+	if rng == nil {
+		rng = mrand.New(mrand.NewSource(m.clock.Now().UnixNano()))
+	}
+
+	firstPlayerID := game.ChooseFirstPlayer(room.HostPlayerID, room.GuestPlayerID, rng)
+	room.TurnPlayerID = firstPlayerID
+	turnDeadline := m.clock.Now().Add(30 * time.Second)
+	room.TurnDeadline = turnDeadline
+
+	roomID := room.ID
+	room.TurnTimer = m.clock.AfterFunc(30*time.Second, func() {
+		m.expireTurnTimer(roomID)
+	})
+
+	hostView := m.buildRoomStateViewLocked(room, "host")
+	guestView := m.buildRoomStateViewLocked(room, "guest")
+
+	slog.Info("battle phase initialized", "roomId", room.ID, "firstPlayerId", firstPlayerID, "turnDeadline", turnDeadline)
+	return firstPlayerID, turnDeadline, hostView, guestView
+}
+
+// buildRoomStateViewLocked constructs a tailored RoomStateView for the given player role.
+// Must be called with m.mu held.
+func (m *LobbyManager) buildRoomStateViewLocked(room *Room, role string) RoomStateView {
+	host, _ := m.registry.GetByID(room.HostPlayerID)
+	hostName := "Host"
+	if host != nil {
+		hostName = host.DisplayName
+	}
+
+	opponentName := ""
+	if role == "guest" {
+		opponentName = hostName
+	} else if room.GuestPlayerID != "" {
+		if guest, ok := m.registry.GetByID(room.GuestPlayerID); ok {
+			opponentName = guest.DisplayName
+		}
+	}
+
+	var guestView *RoomPlayerView
+	if room.GuestPlayerID != "" {
+		gName := opponentName
+		if role == "guest" {
+			if me, ok := m.registry.GetByID(room.GuestPlayerID); ok {
+				gName = me.DisplayName
+			}
+		}
+		guestView = &RoomPlayerView{ID: room.GuestPlayerID, Name: gName}
+	}
+
+	hostView := RoomPlayerView{ID: room.HostPlayerID, Name: hostName}
+
+	view := RoomStateView{
+		RoomID:         room.ID,
+		Phase:          room.Phase,
+		Role:           role,
+		OpponentName:   opponentName,
+		Host:           hostView,
+		Guest:          guestView,
+		HostReady:      room.HostReady,
+		GuestReady:     room.GuestReady,
+		CreatedAt:      room.CreatedAt,
+		WinnerPlayerID: room.WinnerPlayerID,
+		EndReason:      room.EndReason,
+		ShotLog:        room.ShotLog,
+	}
+
+	switch room.Phase {
+	case PhasePlacement:
+		view.PlacementDeadline = &room.PlacementDeadline
+		if role == "host" {
+			view.FleetConfirmed = room.HostFleetConfirmed
+			view.OpponentConfirmed = room.GuestFleetConfirmed
+			view.OwnFleet = room.HostFleet
+		} else {
+			view.FleetConfirmed = room.GuestFleetConfirmed
+			view.OpponentConfirmed = room.HostFleetConfirmed
+			view.OwnFleet = room.GuestFleet
+		}
+	case PhaseBattle, PhaseFinished:
+		view.FleetConfirmed = true
+		view.OpponentConfirmed = true
+		view.TurnPlayerID = room.TurnPlayerID
+		if !room.TurnDeadline.IsZero() {
+			view.TurnDeadline = &room.TurnDeadline
+		}
+
+		var ownBoard, targetBoard *game.Board
+		if role == "host" {
+			view.OwnFleet = room.HostFleet
+			ownBoard = room.HostBoard
+			targetBoard = room.GuestBoard
+		} else {
+			view.OwnFleet = room.GuestFleet
+			ownBoard = room.GuestBoard
+			targetBoard = room.HostBoard
+		}
+
+		if ownBoard != nil && targetBoard != nil {
+			bv := game.BuildPlayerBattleView(ownBoard, targetBoard)
+			view.BattleView = &bv
+		}
+	}
+
+	return view
+}
+
+// FireShot executes a shot action by an active player against the opponent grid during PhaseBattle.
+func (m *LobbyManager) FireShot(playerID string, cell game.Coord) error {
+	m.mu.Lock()
+	currentRoomID, err := m.registry.GetPlayerRoom(playerID)
+	if err != nil || currentRoomID == "" {
+		m.mu.Unlock()
+		slog.Warn("fire shot rejected: not in room", "playerId", playerID)
+		return ErrNotInRoom
+	}
+
+	room, ok := m.rooms[currentRoomID]
+	if !ok {
+		m.mu.Unlock()
+		slog.Warn("fire shot rejected: room not found", "playerId", playerID, "roomId", currentRoomID)
+		return ErrRoomNotFound
+	}
+
+	if room.Phase == PhaseFinished {
+		m.mu.Unlock()
+		slog.Warn("fire shot rejected: game already finished", "playerId", playerID, "roomId", currentRoomID)
+		return ErrGameOver
+	}
+
+	if room.Phase != PhaseBattle {
+		phase := room.Phase
+		m.mu.Unlock()
+		slog.Warn("fire shot rejected: not in battle phase", "playerId", playerID, "roomId", currentRoomID, "phase", phase)
+		return ErrNotInBattle
+	}
+
+	if room.TurnPlayerID != playerID {
+		turnID := room.TurnPlayerID
+		m.mu.Unlock()
+		slog.Warn("fire shot rejected: not your turn", "playerId", playerID, "turnPlayerId", turnID)
+		return ErrNotYourTurn
+	}
+
+	isHost := (playerID == room.HostPlayerID)
+	var targetBoard *game.Board
+	var opponentID string
+	if isHost {
+		targetBoard = room.GuestBoard
+		opponentID = room.GuestPlayerID
+	} else {
+		targetBoard = room.HostBoard
+		opponentID = room.HostPlayerID
+	}
+
+	if targetBoard == nil {
+		m.mu.Unlock()
+		return errors.New("target board not initialized")
+	}
+
+	outcome, err := targetBoard.FireShot(cell)
+	if err != nil {
+		m.mu.Unlock()
+		slog.Warn("fire shot rejected: invalid shot", "playerId", playerID, "cell", cell, "error", err)
+		return err
+	}
+
+	// Shot succeeded, stop active turn timer
+	if room.TurnTimer != nil {
+		room.TurnTimer.Stop()
+		room.TurnTimer = nil
+	}
+
+	record := ShotRecord{
+		ShooterID: playerID,
+		Cell:      cell,
+		Result:    outcome.Result,
+		SunkShip:  outcome.SunkShip,
+		Auto:      false,
+		Timestamp: m.clock.Now(),
+	}
+	room.ShotLog = append(room.ShotLog, record)
+
+	slog.Info("shot executed", "roomId", room.ID, "shooterId", playerID, "cell", cell.String(), "result", outcome.Result)
+
+	isWon := targetBoard.AllShipsSunk()
+	var winnerID, endReason string
+	var nextTurnID string
+	var nextDeadline time.Time
+	roomID := room.ID
+	hostID := room.HostPlayerID
+	guestID := room.GuestPlayerID
+
+	if isWon {
+		room.Phase = PhaseFinished
+		room.WinnerPlayerID = playerID
+		room.EndReason = "all_sunk"
+		winnerID = playerID
+		endReason = "all_sunk"
+		slog.Info("game over: all ships sunk", "roomId", room.ID, "winnerId", winnerID, "totalShots", len(room.ShotLog))
+	} else {
+		nextTurnID = opponentID
+		room.TurnPlayerID = nextTurnID
+		nextDeadline = m.clock.Now().Add(30 * time.Second)
+		room.TurnDeadline = nextDeadline
+		room.TurnTimer = m.clock.AfterFunc(30*time.Second, func() {
+			m.expireTurnTimer(roomID)
+		})
+	}
+
+	hostView := m.buildRoomStateViewLocked(room, "host")
+	guestView := m.buildRoomStateViewLocked(room, "guest")
+	totalShots := len(room.ShotLog)
+
+	m.mu.Unlock()
+
+	// Broadcast battle.shotResult
+	shotResultPayload := map[string]any{
+		"by":       playerID,
+		"cell":     cell,
+		"result":   outcome.Result,
+		"sunkShip": outcome.SunkShip,
+		"auto":     false,
+	}
+	m.send(hostID, "battle.shotResult", shotResultPayload)
+	if guestID != "" {
+		m.send(guestID, "battle.shotResult", shotResultPayload)
+	}
+
+	if isWon {
+		gameOverPayload := map[string]any{
+			"winnerPlayerId": winnerID,
+			"reason":         endReason,
+			"totalShots":     totalShots,
+		}
+		m.send(hostID, "game.over", gameOverPayload)
+		if guestID != "" {
+			m.send(guestID, "game.over", gameOverPayload)
+		}
+	} else {
+		turnPayload := map[string]any{
+			"turnPlayerId": nextTurnID,
+			"deadline":     nextDeadline,
+		}
+		m.send(hostID, "battle.turn", turnPayload)
+		if guestID != "" {
+			m.send(guestID, "battle.turn", turnPayload)
+		}
+	}
+
+	m.send(hostID, "room.state", hostView)
+	if guestID != "" {
+		m.send(guestID, "room.state", guestView)
+	}
+
+	return nil
+}
+
+// expireTurnTimer automatically executes a random untargeted shot on behalf of an active player upon 30s timeout.
+func (m *LobbyManager) expireTurnTimer(roomID string) {
+	m.mu.Lock()
+	room, ok := m.rooms[roomID]
+	if !ok || room.Phase != PhaseBattle {
+		m.mu.Unlock()
+		return
+	}
+
+	if room.TurnTimer != nil {
+		room.TurnTimer.Stop()
+		room.TurnTimer = nil
+	}
+
+	activePlayerID := room.TurnPlayerID
+	isHost := (activePlayerID == room.HostPlayerID)
+	var targetBoard *game.Board
+	var opponentID string
+	if isHost {
+		targetBoard = room.GuestBoard
+		opponentID = room.GuestPlayerID
+	} else {
+		targetBoard = room.HostBoard
+		opponentID = room.HostPlayerID
+	}
+
+	if targetBoard == nil {
+		m.mu.Unlock()
+		return
+	}
+
+	rng := m.rng
+	if rng == nil {
+		rng = mrand.New(mrand.NewSource(m.clock.Now().UnixNano()))
+	}
+
+	cell, err := game.RandomUntargetedCell(targetBoard, rng)
+	if err != nil {
+		m.mu.Unlock()
+		slog.Error("failed to find untargeted cell for auto-shot", "roomId", roomID, "error", err)
+		return
+	}
+
+	outcome, err := targetBoard.FireShot(cell)
+	if err != nil {
+		m.mu.Unlock()
+		slog.Error("failed to execute auto-shot", "roomId", roomID, "cell", cell, "error", err)
+		return
+	}
+
+	record := ShotRecord{
+		ShooterID: activePlayerID,
+		Cell:      cell,
+		Result:    outcome.Result,
+		SunkShip:  outcome.SunkShip,
+		Auto:      true,
+		Timestamp: m.clock.Now(),
+	}
+	room.ShotLog = append(room.ShotLog, record)
+
+	slog.Info("turn timer expired, auto-shot executed", "roomId", roomID, "shooterId", activePlayerID, "cell", cell.String(), "result", outcome.Result)
+
+	isWon := targetBoard.AllShipsSunk()
+	var winnerID, endReason string
+	var nextTurnID string
+	var nextDeadline time.Time
+	hostID := room.HostPlayerID
+	guestID := room.GuestPlayerID
+
+	if isWon {
+		room.Phase = PhaseFinished
+		room.WinnerPlayerID = activePlayerID
+		room.EndReason = "all_sunk"
+		winnerID = activePlayerID
+		endReason = "all_sunk"
+		slog.Info("game over via auto-shot: all ships sunk", "roomId", room.ID, "winnerId", winnerID, "totalShots", len(room.ShotLog))
+	} else {
+		nextTurnID = opponentID
+		room.TurnPlayerID = nextTurnID
+		nextDeadline = m.clock.Now().Add(30 * time.Second)
+		room.TurnDeadline = nextDeadline
+		room.TurnTimer = m.clock.AfterFunc(30*time.Second, func() {
+			m.expireTurnTimer(roomID)
+		})
+	}
+
+	hostView := m.buildRoomStateViewLocked(room, "host")
+	guestView := m.buildRoomStateViewLocked(room, "guest")
+	totalShots := len(room.ShotLog)
+
+	m.mu.Unlock()
+
+	// Broadcast battle.shotResult with auto: true
+	shotResultPayload := map[string]any{
+		"by":       activePlayerID,
+		"cell":     cell,
+		"result":   outcome.Result,
+		"sunkShip": outcome.SunkShip,
+		"auto":     true,
+	}
+	m.send(hostID, "battle.shotResult", shotResultPayload)
+	if guestID != "" {
+		m.send(guestID, "battle.shotResult", shotResultPayload)
+	}
+
+	if isWon {
+		gameOverPayload := map[string]any{
+			"winnerPlayerId": winnerID,
+			"reason":         endReason,
+			"totalShots":     totalShots,
+		}
+		m.send(hostID, "game.over", gameOverPayload)
+		if guestID != "" {
+			m.send(guestID, "game.over", gameOverPayload)
+		}
+	} else {
+		turnPayload := map[string]any{
+			"turnPlayerId": nextTurnID,
+			"deadline":     nextDeadline,
+		}
+		m.send(hostID, "battle.turn", turnPayload)
+		if guestID != "" {
+			m.send(guestID, "battle.turn", turnPayload)
+		}
+	}
+
+	m.send(hostID, "room.state", hostView)
+	if guestID != "" {
+		m.send(guestID, "room.state", guestView)
 	}
 }
 
@@ -957,6 +1314,14 @@ func (m *LobbyManager) leaveReadyUpLocked(room *Room, playerID string) error {
 	if room.GuestDisconnectTimer != nil {
 		room.GuestDisconnectTimer.Stop()
 		room.GuestDisconnectTimer = nil
+	}
+	if room.PlacementTimer != nil {
+		room.PlacementTimer.Stop()
+		room.PlacementTimer = nil
+	}
+	if room.TurnTimer != nil {
+		room.TurnTimer.Stop()
+		room.TurnTimer = nil
 	}
 
 	hostID := room.HostPlayerID
@@ -1134,58 +1499,12 @@ func (m *LobbyManager) HandleReconnect(playerID string) (*Room, error) {
 		}
 	}
 
-	host, _ := m.registry.GetByID(room.HostPlayerID)
-	hostName := "Host"
-	if host != nil {
-		hostName = host.DisplayName
-	}
-
 	role := "host"
-	opponentName := ""
 	if playerID != room.HostPlayerID {
 		role = "guest"
-		opponentName = hostName
-	} else if room.GuestPlayerID != "" {
-		if guest, ok := m.registry.GetByID(room.GuestPlayerID); ok {
-			opponentName = guest.DisplayName
-		}
 	}
 
-	var guestView *RoomPlayerView
-	if room.GuestPlayerID != "" {
-		gName := opponentName
-		if role == "guest" {
-			if me, ok := m.registry.GetByID(playerID); ok {
-				gName = me.DisplayName
-			}
-		}
-		guestView = &RoomPlayerView{ID: room.GuestPlayerID, Name: gName}
-	}
-
-	stateView := RoomStateView{
-		RoomID:       room.ID,
-		Phase:        room.Phase,
-		Role:         role,
-		OpponentName: opponentName,
-		Host:         RoomPlayerView{ID: room.HostPlayerID, Name: hostName},
-		Guest:        guestView,
-		HostReady:    room.HostReady,
-		GuestReady:   room.GuestReady,
-		CreatedAt:    room.CreatedAt,
-	}
-
-	if room.Phase == PhasePlacement {
-		stateView.PlacementDeadline = &room.PlacementDeadline
-		if playerID == room.HostPlayerID {
-			stateView.FleetConfirmed = room.HostFleetConfirmed
-			stateView.OpponentConfirmed = room.GuestFleetConfirmed
-			stateView.OwnFleet = room.HostFleet
-		} else {
-			stateView.FleetConfirmed = room.GuestFleetConfirmed
-			stateView.OpponentConfirmed = room.HostFleetConfirmed
-			stateView.OwnFleet = room.GuestFleet
-		}
-	}
+	stateView := m.buildRoomStateViewLocked(room, role)
 
 	var readyState *RoomReadyStateView
 	if room.Phase == PhaseReadyUp {

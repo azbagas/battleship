@@ -39,6 +39,16 @@ describe('WaitingRoomScreen', () => {
     ownFleet: [],
     placementDeadline: null,
     submitFleet: vi.fn(),
+    turnPlayerId: null,
+    turnDeadline: null,
+    isMyTurn: false,
+    targetShots: new Map(),
+    ownShots: new Map(),
+    opponentSunkShips: [],
+    ownSunkShips: [],
+    recentEvents: [],
+    gameOverResult: null,
+    fireShot: vi.fn(),
   }
 
   const defaultMockSession: SessionContextValue = {

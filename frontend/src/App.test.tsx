@@ -369,4 +369,78 @@ describe('App & Session Lifecycle', () => {
       expect(screen.getByText('Fleet Dock')).toBeInTheDocument()
     })
   })
+
+  it('transitions into battle phase and allows firing a shot on player turn', async () => {
+    // Preload session token in localStorage
+    sessionStore.saveSession('tok_battle_123', 'Commander Keen')
+
+    render(<App />)
+
+    // Handshake
+    await waitFor(() => {
+      expect(MockWebSocket.instances.length).toBe(1)
+    })
+    const ws = MockWebSocket.instances[0]
+
+    const battleState: RoomStatePayload = {
+      roomId: 'r_battle_sector_999999',
+      phase: 'battle',
+      role: 'host',
+      opponentName: 'Captain Cyber',
+      host: { id: 'p_player1', name: 'Commander Keen' },
+      guest: { id: 'p_player2', name: 'Captain Cyber' },
+      turnPlayerId: 'p_player1',
+      turnDeadline: new Date(Date.now() + 30000).toISOString(),
+      createdAt: new Date().toISOString(),
+      ownFleet: [
+        { type: 'carrier', origin: { x: 0, y: 0 }, orientation: 'horizontal' },
+        { type: 'battleship', origin: { x: 0, y: 1 }, orientation: 'horizontal' },
+        { type: 'cruiser', origin: { x: 0, y: 2 }, orientation: 'horizontal' },
+        { type: 'submarine', origin: { x: 0, y: 3 }, orientation: 'horizontal' },
+        { type: 'destroyer', origin: { x: 0, y: 4 }, orientation: 'horizontal' },
+      ],
+    }
+
+    ws.receive('hello.ok', {
+      playerId: 'p_player1',
+      sessionToken: 'tok_battle_123',
+      displayName: 'Commander Keen',
+      restoredState: battleState,
+    })
+
+    // Advance directly into BattleScreen
+    await waitFor(() => {
+      expect(screen.getByText('Battleship Combat')).toBeInTheDocument()
+      expect(screen.getByText(/SEC-999999/i)).toBeInTheDocument()
+      expect(screen.getByText(/YOUR TURN — SELECT TARGET CELL/i)).toBeInTheDocument()
+      expect(screen.getByText('Targeting Radar (Hostile Waters)')).toBeInTheDocument()
+      expect(screen.getByText('Defensive Grid (Your Fleet)')).toBeInTheDocument()
+    })
+
+    // Click target cell B3 (x=1, y=2)
+    const cellB3 = screen.getByRole('button', { name: /Target cell B3, ready to fire/i })
+    fireEvent.click(cellB3)
+
+    await waitFor(() => {
+      const lastMsg = JSON.parse(ws.sentMessages[ws.sentMessages.length - 1])
+      expect(lastMsg.type).toBe('battle.fire')
+      expect(lastMsg.payload.cell).toEqual({ x: 1, y: 2 })
+    })
+
+    // Simulate backend sending shot result (hit) and switching turn to Captain Cyber
+    ws.receive('battle.shotResult', {
+      by: 'p_player1',
+      cell: { x: 1, y: 2 },
+      result: 'hit',
+    })
+    ws.receive('battle.turn', {
+      turnPlayerId: 'p_player2',
+      deadline: new Date(Date.now() + 30000).toISOString(),
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText(/CAPTAIN CYBER'S TURN — BRACE FOR IMPACT/i)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Target cell B3, HIT/i })).toBeInTheDocument()
+    })
+  })
 })

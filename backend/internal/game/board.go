@@ -16,11 +16,15 @@ var (
 	ErrInvalidOrientation = errors.New("invalid ship orientation")
 	ErrUnknownShipType   = errors.New("unknown ship type")
 	ErrNoValidPlacement  = errors.New("no valid placement possible for remaining ships")
+	ErrCellOutOfBounds   = errors.New("shot coordinate is out of grid bounds")
+	ErrCellAlreadyTargeted = errors.New("cell has already been targeted")
+	ErrNoUntargetedCells = errors.New("no untargeted cells remain on grid")
 )
 
 // Board represents a player's 10×10 ocean board and fleet.
 type Board struct {
-	Ships []PlacedShip `json:"ships"`
+	Ships []PlacedShip         `json:"ships"`
+	Shots map[Coord]ShotResult `json:"shots"`
 }
 
 // NewBoard creates and validates a board containing the standard 5-ship fleet.
@@ -30,7 +34,124 @@ func NewBoard(ships []PlacedShip) (*Board, error) {
 	}
 	copied := make([]PlacedShip, len(ships))
 	copy(copied, ships)
-	return &Board{Ships: copied}, nil
+	return &Board{
+		Ships: copied,
+		Shots: make(map[Coord]ShotResult),
+	}, nil
+}
+
+// FireShot executes a shot against the board and resolves it as miss, hit, or sunk.
+func (b *Board) FireShot(cell Coord) (ShotOutcome, error) {
+	if !cell.InBounds() {
+		return ShotOutcome{}, fmt.Errorf("%w: (%d,%d)", ErrCellOutOfBounds, cell.X, cell.Y)
+	}
+
+	if b.Shots == nil {
+		b.Shots = make(map[Coord]ShotResult)
+	}
+
+	if _, exists := b.Shots[cell]; exists {
+		return ShotOutcome{}, fmt.Errorf("%w: %s (%d,%d)", ErrCellAlreadyTargeted, cell.String(), cell.X, cell.Y)
+	}
+
+	// Check if this shot hits any ship
+	for _, ship := range b.Ships {
+		cells, err := ship.Cells()
+		if err != nil {
+			continue
+		}
+
+		for _, sc := range cells {
+			if sc == cell {
+				// Hit!
+				b.Shots[cell] = ShotResultHit
+
+				// Check if all cells of this ship are now hit
+				allHit := true
+				for _, c := range cells {
+					res, hit := b.Shots[c]
+					if !hit || (res != ShotResultHit && res != ShotResultSunk) {
+						allHit = false
+						break
+					}
+				}
+
+				if allHit {
+					// Mark all cells of this ship as sunk
+					for _, c := range cells {
+						b.Shots[c] = ShotResultSunk
+					}
+					sunkInfo := &SunkShipInfo{
+						Type:  ship.Type,
+						Cells: cells,
+					}
+					return ShotOutcome{
+						Result:   ShotResultSunk,
+						Cell:     cell,
+						SunkShip: sunkInfo,
+					}, nil
+				}
+
+				return ShotOutcome{
+					Result: ShotResultHit,
+					Cell:   cell,
+				}, nil
+			}
+		}
+	}
+
+	// Miss
+	b.Shots[cell] = ShotResultMiss
+	return ShotOutcome{
+		Result: ShotResultMiss,
+		Cell:   cell,
+	}, nil
+}
+
+// SunkShips returns information on all ships that have been completely sunk on this board.
+func (b *Board) SunkShips() []SunkShipInfo {
+	if b.Shots == nil {
+		return nil
+	}
+
+	var sunk []SunkShipInfo
+	for _, ship := range b.Ships {
+		cells, err := ship.Cells()
+		if err != nil {
+			continue
+		}
+
+		allHit := true
+		for _, c := range cells {
+			res, hit := b.Shots[c]
+			if !hit || (res != ShotResultHit && res != ShotResultSunk) {
+				allHit = false
+				break
+			}
+		}
+
+		if allHit {
+			sunk = append(sunk, SunkShipInfo{
+				Type:  ship.Type,
+				Cells: cells,
+			})
+		}
+	}
+
+	return sunk
+}
+
+// RemainingShips returns the count of ships in the fleet that are still afloat.
+func (b *Board) RemainingShips() int {
+	return len(b.Ships) - len(b.SunkShips())
+}
+
+// AllShipsSunk returns true if all 5 ships in the fleet have been sunk.
+func (b *Board) AllShipsSunk() bool {
+	if len(b.Ships) == 0 {
+		return false
+	}
+	return len(b.SunkShips()) == len(b.Ships)
 }
 
 // ValidateFleet checks that a fleet of 5 ships meets all Battleship rules:

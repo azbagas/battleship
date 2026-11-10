@@ -4,13 +4,13 @@
      Tag tasks with feature IDs. Each task has a "Done when" line. -->
 
 ## Current focus
-In progress: none
+In progress: T-14 [F-06] Implement backend WebSocket ping/pong heartbeats, 60-second disconnect grace timer (`opponent.disconnected`, `opponent.reconnected`), timeout forfeit/abandonment resolution, and explicit `game.leave` forfeit.
 
 Blocked: nothing
 
 Known issues: none
 
-Next up: T-11 [F-05] Implement pure `internal/game` shot resolution (`miss`, `hit`, `sunk` with sunk ship type and cells), random first-player selection, random untargeted cell selector for auto-shots, win detection, and per-player filtered board views.
+Next up: T-15 [F-06] Build frontend automatic reconnection with backoff, connection status indicator, opponent disconnect countdown banner, **Leave game** confirmation prompt, and server-restart lost-game notification.
 
 <!-- Update this block at the end of every session. If it passes ~15 lines, move it to STATUS.md. -->
 
@@ -51,11 +51,11 @@ Next up: T-11 [F-05] Implement pure `internal/game` shot resolution (`miss`, `hi
   Done when: players on both desktop and touch viewports can place, move, rotate, randomize, and confirm fleets (or let the 60s timer auto-confirm) to enter battle.
 
 ### F-05 Turn-Based Battle Phase
-- [ ] T-11 [F-05] Implement pure `internal/game` shot resolution (`miss`, `hit`, `sunk` with sunk ship type and cells), random first-player selection, random untargeted cell selector for auto-shots, win detection, and per-player filtered board views.
+- [x] T-11 [F-05] Implement pure `internal/game` shot resolution (`miss`, `hit`, `sunk` with sunk ship type and cells), random first-player selection, random untargeted cell selector for auto-shots, win detection, and per-player filtered board views.
   Done when: unit tests verify hit/miss/sunk transitions, win detection when all 5 ships sink, random untargeted shot selection, and zero leakage of unrevealed opponent ships in player views.
-- [ ] T-12 [F-05] Implement backend battle phase loop (`battle.start`, `battle.fire`, `battle.shotResult`, `battle.turn`, `game.over`) and the 30-second turn timer that fires an automatic random shot (`auto: true`) on timeout.
+- [x] T-12 [F-05] Implement backend battle phase loop (`battle.start`, `battle.fire`, `battle.shotResult`, `battle.turn`, `game.over`) and the 30-second turn timer that fires an automatic random shot (`auto: true`) on timeout.
   Done when: room tests with an injectable clock verify turn alternation, out-of-turn/duplicate-cell rejection, 30s auto-shot execution, and transition to `finished` on win.
-- [ ] T-13 [F-05] Build frontend Battle screen with own and target grids, turn banner, 30s countdown, remaining ships indicator, hit/miss/sunk feedback, and recent events log.
+- [x] T-13 [F-05] Build frontend Battle screen with own and target grids, turn banner, 30s countdown, remaining ships indicator, hit/miss/sunk feedback, and recent events log.
   Done when: two players can play a complete battle from first shot to sinking all 5 ships and see accurate turn timers, shot markers, sunk ship reveals, and event log entries.
 
 ### F-06 Disconnect Handling, Reconnection & Forfeit
@@ -102,6 +102,9 @@ Next up: T-11 [F-05] Implement pure `internal/game` shot resolution (`miss`, `hi
 - 2026-11-10: T-01b added root package.json orchestrator with `concurrently` to run backend and frontend simultaneously with color-coded logs and graceful SIGINT cleanup via `npm run dev`.
 - 2026-11-10: T-06 & T-07 implemented ready-up room phase with `room.ready`, `room.unready`, `room.readyState`, and `room.leave` / `game.leave`. Enforces departure rules (guest leaves/disconnect timeout returns room to waiting lobby with public lobby upsert; host leaves/disconnect timeout destroys room and returns guest to lobby; 60s disconnect grace period applies before timeout resolution). Mutual readiness automatically transitions the room to the placement phase and renders `PlacementPlaceholder`.
 - 2026-11-10: T-08, T-09, & T-10 implemented pure `internal/game` engine (10×10 grid, 5 standard ships, validation, random fleet generation, partial auto-placement preservation), backend placement orchestration (`placement.submit`, `placement.ready`, `placement.confirmed`, `placement.opponentReady`, 60-second placement timer with auto-completion on deadline), and frontend responsive Placement screen with desktop HTML5 drag-and-drop, mobile tap-to-place, rotation ('R' key/button), Randomize, and Confirm fleet. Coordinates are never leaked in opponent ready notifications.
+- 2026-11-10: T-11 implemented pure `internal/game` combat mechanics: shot resolution into miss/hit/sunk, sunk vessel details (type and cells), random first-player selection, uniform random untargeted cell selector for turn timeouts, win detection on sinking all 5 ships, and zero-leakage player board view projection verified against JSON serialization leaks.
+- 2026-11-10: T-12 implemented backend battle phase loop (`battle.start`, `battle.fire`, `battle.shotResult`, `battle.turn`, `game.over`), 30-second turn timer with injectable clock and random auto-shots on timeout, strict turn alternation, out-of-turn and duplicate-cell rejection, and room transition to `PhaseFinished` on win. Full room and WebSocket integration tests verify race freedom.
+- 2026-11-10: T-13 implemented frontend Battle screen (`BattleScreen.tsx`) featuring primary Target Radar Grid (10×10), Defensive Fleet Grid (10×10), 30s urgency turn timer with countdown progress bar and `<10s` red alert pulsing, friendly/hostile remaining ships rosters with health pips and sunk badges, colorblind-accessible symbols (`•` miss, `✕` hit, sunken hull outline), live tactical combat event log with `AUTO` badges, responsive mobile tab switcher (supporting 360px viewports without horizontal scrolling), surrender confirmation modal, and Game Over overlay announcing victory/defeat with lobby return CTA. Verified with 13 frontend test suites (89 passing tests), clean ESLint, and zero TypeScript build errors.
 
 ## Archive
 <!-- Move finished version groups here as one-line summaries, e.g. "v1 shipped: F-01 to F-03." -->

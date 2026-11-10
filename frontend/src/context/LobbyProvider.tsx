@@ -1,7 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
+  BattleShotResultPayload,
+  BattleStartPayload,
+  BattleTurnPayload,
+  Coord,
   ErrorCode,
   ErrorPayload,
+  GameOverPayload,
   HelloOKPayload,
   LobbySnapshotPayload,
   LobbyUpdatePayload,
@@ -10,6 +15,8 @@ import {
   PlacementOpponentReadyPayload,
   RoomReadyStatePayload,
   RoomStatePayload,
+  ShotResult,
+  SunkShipInfo,
   WaitingRoomView,
 } from '../types/protocol'
 import { wsClient, WebSocketClient } from '../services/wsClient'
@@ -54,6 +61,34 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
   const [ownFleet, setOwnFleet] = useState<PlacedShip[]>([])
   const [placementDeadline, setPlacementDeadline] = useState<string | null>(null)
 
+  // Battle phase states
+  const [turnPlayerId, setTurnPlayerId] = useState<string | null>(null)
+  const [turnDeadline, setTurnDeadline] = useState<string | null>(null)
+  const [targetShots, setTargetShots] = useState<Map<string, ShotResult>>(new Map())
+  const [ownShots, setOwnShots] = useState<Map<string, ShotResult>>(new Map())
+  const [opponentSunkShips, setOpponentSunkShips] = useState<SunkShipInfo[]>([])
+  const [ownSunkShips, setOwnSunkShips] = useState<SunkShipInfo[]>([])
+  const [recentEvents, setRecentEvents] = useState<BattleShotResultPayload[]>([])
+  const [gameOverResult, setGameOverResult] = useState<GameOverPayload | null>(null)
+
+  const isMyTurn = Boolean(
+    session.player &&
+      turnPlayerId &&
+      session.player.playerId === turnPlayerId &&
+      !gameOverResult,
+  )
+
+  const resetBattleState = useCallback(() => {
+    setTurnPlayerId(null)
+    setTurnDeadline(null)
+    setTargetShots(new Map())
+    setOwnShots(new Map())
+    setOpponentSunkShips([])
+    setOwnSunkShips([])
+    setRecentEvents([])
+    setGameOverResult(null)
+  }, [])
+
   // Reset lobby state if session logs out or resets
   useEffect(() => {
     if (!session.player) {
@@ -71,8 +106,9 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       setIsOpponentConfirmed(false)
       setOwnFleet([])
       setPlacementDeadline(null)
+      resetBattleState()
     }
-  }, [session.player])
+  }, [session.player, resetBattleState])
 
   // Wire WebSocket message listeners
   useEffect(() => {
@@ -95,6 +131,41 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
           }
           if (Array.isArray(state.ownFleet)) {
             setOwnFleet(state.ownFleet)
+          }
+          if (state.turnPlayerId) {
+            setTurnPlayerId(state.turnPlayerId)
+          }
+          if (state.turnDeadline) {
+            setTurnDeadline(state.turnDeadline)
+          }
+          if (state.winnerPlayerId) {
+            setGameOverResult({
+              winnerPlayerId: state.winnerPlayerId,
+              reason: state.endReason || 'all_sunk',
+              totalShots: 0,
+            })
+          }
+          if (state.battleView) {
+            if (Array.isArray(state.battleView.targetBoard?.shots)) {
+              const tMap = new Map<string, ShotResult>()
+              state.battleView.targetBoard.shots.forEach((s) => {
+                tMap.set(`${s.cell.x},${s.cell.y}`, s.result)
+              })
+              setTargetShots(tMap)
+            }
+            if (Array.isArray(state.battleView.ownBoard?.shots)) {
+              const oMap = new Map<string, ShotResult>()
+              state.battleView.ownBoard.shots.forEach((s) => {
+                oMap.set(`${s.cell.x},${s.cell.y}`, s.result)
+              })
+              setOwnShots(oMap)
+            }
+            if (Array.isArray(state.battleView.targetBoard?.sunkShips)) {
+              setOpponentSunkShips(state.battleView.targetBoard.sunkShips)
+            }
+            if (Array.isArray(state.battleView.ownBoard?.sunkShips)) {
+              setOwnSunkShips(state.battleView.ownBoard.sunkShips)
+            }
           }
         }
       }
@@ -119,6 +190,7 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       setIsOpponentConfirmed(false)
       setOwnFleet([])
       setPlacementDeadline(null)
+      resetBattleState()
     })
 
     const unsubUpdate = client.onMessage<LobbyUpdatePayload>('lobby.update', (payload) => {
@@ -163,6 +235,41 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       if (Array.isArray(payload.ownFleet)) {
         setOwnFleet(payload.ownFleet)
       }
+      if (payload.turnPlayerId) {
+        setTurnPlayerId(payload.turnPlayerId)
+      }
+      if (payload.turnDeadline) {
+        setTurnDeadline(payload.turnDeadline)
+      }
+      if (payload.winnerPlayerId) {
+        setGameOverResult({
+          winnerPlayerId: payload.winnerPlayerId,
+          reason: payload.endReason || 'all_sunk',
+          totalShots: 0,
+        })
+      }
+      if (payload.battleView) {
+        if (Array.isArray(payload.battleView.targetBoard?.shots)) {
+          const tMap = new Map<string, ShotResult>()
+          payload.battleView.targetBoard.shots.forEach((s) => {
+            tMap.set(`${s.cell.x},${s.cell.y}`, s.result)
+          })
+          setTargetShots(tMap)
+        }
+        if (Array.isArray(payload.battleView.ownBoard?.shots)) {
+          const oMap = new Map<string, ShotResult>()
+          payload.battleView.ownBoard.shots.forEach((s) => {
+            oMap.set(`${s.cell.x},${s.cell.y}`, s.result)
+          })
+          setOwnShots(oMap)
+        }
+        if (Array.isArray(payload.battleView.targetBoard?.sunkShips)) {
+          setOpponentSunkShips(payload.battleView.targetBoard.sunkShips)
+        }
+        if (Array.isArray(payload.battleView.ownBoard?.sunkShips)) {
+          setOwnSunkShips(payload.battleView.ownBoard.sunkShips)
+        }
+      }
       setIsCreating(false)
       setJoiningRoomId(null)
       setIsLeavingRoom(false)
@@ -193,6 +300,63 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       },
     )
 
+    const unsubBattleStart = client.onMessage<BattleStartPayload>(
+      'battle.start',
+      (payload) => {
+        if (!payload) return
+        setTurnPlayerId(payload.firstPlayerId)
+      },
+    )
+
+    const unsubBattleTurn = client.onMessage<BattleTurnPayload>(
+      'battle.turn',
+      (payload) => {
+        if (!payload) return
+        setTurnPlayerId(payload.turnPlayerId)
+        setTurnDeadline(payload.deadline)
+      },
+    )
+
+    const unsubBattleShotResult = client.onMessage<BattleShotResultPayload>(
+      'battle.shotResult',
+      (payload) => {
+        if (!payload) return
+
+        const isMyShot = session.player?.playerId === payload.by
+        const key = `${payload.cell.x},${payload.cell.y}`
+
+        if (isMyShot) {
+          setTargetShots((prev) => {
+            const next = new Map(prev)
+            next.set(key, payload.result)
+            return next
+          })
+          if (payload.sunkShip) {
+            setOpponentSunkShips((prev) => [...prev, payload.sunkShip!])
+          }
+        } else {
+          setOwnShots((prev) => {
+            const next = new Map(prev)
+            next.set(key, payload.result)
+            return next
+          })
+          if (payload.sunkShip) {
+            setOwnSunkShips((prev) => [...prev, payload.sunkShip!])
+          }
+        }
+
+        setRecentEvents((prev) => [payload, ...prev.slice(0, 19)])
+      },
+    )
+
+    const unsubGameOver = client.onMessage<GameOverPayload>(
+      'game.over',
+      (payload) => {
+        if (!payload) return
+        setGameOverResult(payload)
+      },
+    )
+
     const unsubError = client.onError((err: ErrorPayload) => {
       setIsCreating(false)
       setJoiningRoomId(null)
@@ -220,20 +384,28 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
           setLobbyError('You are not currently hosting a waiting room.')
           break
         case ErrorCode.NotInReadyUp:
-          setLobbyError('Room is not currently in ready-up phase.')
+          setLobbyError('Room is no longer in ready-up phase.')
           break
         case ErrorCode.NotInPlacement:
-          setLobbyError('Room is not currently in placement phase.')
+          setLobbyError('Fleet placement has concluded.')
           break
         case ErrorCode.FleetAlreadyLocked:
-          setLobbyError('Your fleet is already locked and confirmed.')
+          setLobbyError('Fleet is already confirmed and locked.')
           break
         case ErrorCode.InvalidPlacement:
-          setLobbyError(err.message || 'Invalid fleet placement: check for overlaps or out-of-bounds.')
+          setLobbyError('Invalid ship positions. Check for overlaps or out-of-grid bounds.')
+          break
+        case ErrorCode.NotYourTurn:
+          setLobbyError('Stand by, Commander. It is not your turn to fire.')
+          break
+        case ErrorCode.CellAlreadyTargeted:
+          setLobbyError('Coordinate has already been targeted. Select an uncharted grid cell.')
+          break
+        case ErrorCode.GameOver:
+          setLobbyError('The engagement has already concluded.')
           break
         default:
-          // Other errors might be session-level, keep lobbyError null unless relevant
-          break
+          setLobbyError(err.message || 'An unexpected error occurred.')
       }
     })
 
@@ -245,79 +417,76 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       unsubReadyState()
       unsubPlacementConfirmed()
       unsubOpponentReady()
+      unsubBattleStart()
+      unsubBattleTurn()
+      unsubBattleShotResult()
+      unsubGameOver()
       unsubError()
     }
-  }, [client])
+  }, [client, session.player, resetBattleState])
 
   const isRoomCapReached = totalRooms >= maxRooms
 
   const createRoom = useCallback(() => {
-    if (isCreating || isRoomCapReached || activeRoom) return
     setIsCreating(true)
     setLobbyError(null)
-    const sent = client.send('lobby.create', {})
-    if (!sent) {
-      setIsCreating(false)
-    }
-  }, [client, isCreating, isRoomCapReached, activeRoom])
+    client.send('lobby.create', {})
+  }, [client])
 
   const joinRoom = useCallback(
     (roomId: string) => {
-      if (joiningRoomId || activeRoom || !roomId) return
       setJoiningRoomId(roomId)
       setLobbyError(null)
-      const sent = client.send('lobby.join', { roomId })
-      if (!sent) {
-        setJoiningRoomId(null)
-      }
+      client.send('lobby.join', { roomId })
     },
-    [client, joiningRoomId, activeRoom],
+    [client],
   )
 
   const cancelRoom = useCallback(() => {
-    if (isCancelling) return
     setIsCancelling(true)
-    const sent = client.send('lobby.cancel', {})
-    if (!sent) {
-      setIsCancelling(false)
-    }
-  }, [client, isCancelling])
-
-  const toggleReady = useCallback(() => {
-    if (!activeRoom || activeRoom.phase !== 'ready-up' || isTogglingReady) return
-
-    const isSelfReady =
-      activeRoom.role === 'host'
-        ? !!readyState?.hostReady
-        : !!readyState?.guestReady
-
-    setIsTogglingReady(true)
-    const sent = isSelfReady
-      ? client.send('room.unready', {})
-      : client.send('room.ready', {})
-    if (!sent) {
-      setIsTogglingReady(false)
-    }
-  }, [client, activeRoom, readyState, isTogglingReady])
-
-  const leaveRoom = useCallback(() => {
-    if (isLeavingRoom) return
-    setIsLeavingRoom(true)
-    const sent = client.send('room.leave', {})
-    if (!sent) {
-      setIsLeavingRoom(false)
-    }
-  }, [client, isLeavingRoom])
+    setLobbyError(null)
+    client.send('lobby.cancel', {})
+  }, [client])
 
   const clearLobbyError = useCallback(() => {
     setLobbyError(null)
   }, [])
 
+  const toggleReady = useCallback(() => {
+    if (!activeRoom || activeRoom.phase !== 'ready-up') return
+    setIsTogglingReady(true)
+    const amHost = activeRoom.role === 'host'
+    const currentlyReady = amHost ? readyState?.hostReady : readyState?.guestReady
+
+    if (currentlyReady) {
+      client.send('room.unready', {})
+    } else {
+      client.send('room.ready', {})
+    }
+  }, [activeRoom, readyState, client])
+
+  const leaveRoom = useCallback(() => {
+    setIsLeavingRoom(true)
+    setLobbyError(null)
+    client.send('room.leave', {})
+  }, [client])
+
   const submitFleet = useCallback(
     (ships: PlacedShip[]) => {
+      if (!activeRoom || activeRoom.phase !== 'placement') return
       client.send('placement.submit', { ships })
     },
-    [client],
+    [activeRoom, client],
+  )
+
+  const fireShot = useCallback(
+    (cell: Coord) => {
+      if (!isMyTurn || gameOverResult) return
+      const key = `${cell.x},${cell.y}`
+      if (targetShots.has(key)) return
+      client.send('battle.fire', { cell })
+    },
+    [isMyTurn, gameOverResult, targetShots, client],
   )
 
   const value = useMemo(
@@ -345,6 +514,16 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       ownFleet,
       placementDeadline,
       submitFleet,
+      turnPlayerId,
+      turnDeadline,
+      isMyTurn,
+      targetShots,
+      ownShots,
+      opponentSunkShips,
+      ownSunkShips,
+      recentEvents,
+      gameOverResult,
+      fireShot,
     }),
     [
       rooms,
@@ -370,9 +549,18 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       ownFleet,
       placementDeadline,
       submitFleet,
+      turnPlayerId,
+      turnDeadline,
+      isMyTurn,
+      targetShots,
+      ownShots,
+      opponentSunkShips,
+      ownSunkShips,
+      recentEvents,
+      gameOverResult,
+      fireShot,
     ],
   )
 
   return <LobbyContext.Provider value={value}>{children}</LobbyContext.Provider>
 }
-

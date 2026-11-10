@@ -108,3 +108,26 @@ func (s PlacedShip) Cells() ([]Coord, error) {
 	return cells, nil
 }
 
+// ShotResult represents the resolution of a single shot.
+type ShotResult string
+
+const (
+	ShotResultMiss ShotResult = "miss"
+	ShotResultHit  ShotResult = "hit"
+	ShotResultSunk ShotResult = "sunk"
+)
+
+// SunkShipInfo reveals the ship type and occupied coordinates once a vessel has been sunk.
+type SunkShipInfo struct {
+	Type  ShipType `json:"type"`
+	Cells []Coord  `json:"cells"`
+}
+
+// ShotOutcome describes the immediate result of an executed shot.
+type ShotOutcome struct {
+	Result   ShotResult    `json:"result"`
+	Cell     Coord         `json:"cell"`
+	SunkShip *SunkShipInfo `json:"sunkShip,omitempty"`
+}
+
+

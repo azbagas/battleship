@@ -8,6 +8,7 @@ import { LobbyScreen } from './components/LobbyScreen'
 import { WaitingRoomScreen } from './components/WaitingRoomScreen'
 import { ReadyUpScreen } from './components/ReadyUpScreen'
 import { PlacementScreen } from './components/PlacementScreen'
+import { BattleScreen } from './components/BattleScreen'
 
 export const AppContent: React.FC = () => {
   const { player, isSessionConflict } = useSession()
@@ -28,6 +29,9 @@ export const AppContent: React.FC = () => {
     }
     if (activeRoom.phase === 'placement') {
       return <PlacementScreen />
+    }
+    if (activeRoom.phase === 'battle' || activeRoom.phase === 'finished') {
+      return <BattleScreen />
     }
   }
 

@@ -28,6 +28,11 @@ const (
 	TypePlacementReady         MessageType = "placement.ready"
 	TypePlacementOpponentReady MessageType = "placement.opponentReady"
 	TypePlacementConfirmed     MessageType = "placement.confirmed"
+	TypeBattleFire             MessageType = "battle.fire"
+	TypeBattleStart            MessageType = "battle.start"
+	TypeBattleShotResult       MessageType = "battle.shotResult"
+	TypeBattleTurn             MessageType = "battle.turn"
+	TypeGameOver               MessageType = "game.over"
 )
 
 // InboundMessage represents a received client JSON envelope.
@@ -84,6 +89,38 @@ type PlacementOpponentReadyPayload struct {
 	RoomID string `json:"roomId"`
 }
 
+// BattleFirePayload represents a player's intent to fire at a target cell.
+type BattleFirePayload struct {
+	Cell game.Coord `json:"cell"`
+}
+
+// BattleStartPayload announces the start of combat and designated first player.
+type BattleStartPayload struct {
+	FirstPlayerID string `json:"firstPlayerId"`
+}
+
+// BattleShotResultPayload broadcasts the outcome of a shot to both players.
+type BattleShotResultPayload struct {
+	By       string             `json:"by"`
+	Cell     game.Coord         `json:"cell"`
+	Result   game.ShotResult    `json:"result"`
+	SunkShip *game.SunkShipInfo `json:"sunkShip,omitempty"`
+	Auto     bool               `json:"auto,omitempty"`
+}
+
+// BattleTurnPayload announces the active shooter and deadline for the turn.
+type BattleTurnPayload struct {
+	TurnPlayerID string `json:"turnPlayerId"`
+	Deadline     string `json:"deadline"`
+}
+
+// GameOverPayload broadcasts match conclusion when all 5 vessels of a fleet are sunk.
+type GameOverPayload struct {
+	WinnerPlayerID string `json:"winnerPlayerId"`
+	Reason         string `json:"reason"`
+	TotalShots     int    `json:"totalShots"`
+}
+
 // Standard protocol error codes.
 const (
 	ErrCodeInvalidHandshake     = "INVALID_HANDSHAKE"
@@ -101,4 +138,9 @@ const (
 	ErrCodeNotInPlacement       = "NOT_IN_PLACEMENT"
 	ErrCodeFleetAlreadyLocked   = "FLEET_ALREADY_LOCKED"
 	ErrCodeInvalidPlacement     = "INVALID_PLACEMENT"
+	ErrCodeNotInBattle          = "NOT_IN_BATTLE"
+	ErrCodeNotYourTurn          = "NOT_YOUR_TURN"
+	ErrCodeCellAlreadyTargeted  = "CELL_ALREADY_TARGETED"
+	ErrCodeCellOutOfBounds      = "INVALID_COORDINATE"
+	ErrCodeGameOver             = "GAME_OVER"
 )

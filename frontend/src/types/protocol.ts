@@ -18,6 +18,11 @@ export type MessageType =
   | 'placement.ready'
   | 'placement.opponentReady'
   | 'placement.confirmed'
+  | 'battle.fire'
+  | 'battle.start'
+  | 'battle.shotResult'
+  | 'battle.turn'
+  | 'game.over'
   | string
 
 export interface InboundMessage<T = unknown> {
@@ -106,6 +111,57 @@ export interface PlacementOpponentReadyPayload {
   roomId: string
 }
 
+export type ShotResult = 'miss' | 'hit' | 'sunk'
+
+export interface SunkShipInfo {
+  type: ShipType
+  cells: Coord[]
+}
+
+export interface ShotView {
+  cell: Coord
+  result: ShotResult
+}
+
+export interface PlayerBattleView {
+  ownBoard: {
+    ships: PlacedShip[]
+    shots: ShotView[]
+    sunkShips: SunkShipInfo[]
+    remainingShips: number
+    allSunk: boolean
+  }
+  targetBoard: {
+    shots: ShotView[]
+    sunkShips: SunkShipInfo[]
+    remainingShips: number
+    allSunk: boolean
+  }
+}
+
+export interface BattleShotResultPayload {
+  by: string
+  cell: Coord
+  result: ShotResult
+  sunkShip?: SunkShipInfo
+  auto?: boolean
+}
+
+export interface BattleTurnPayload {
+  turnPlayerId: string
+  deadline: string
+}
+
+export interface BattleStartPayload {
+  firstPlayerId: string
+}
+
+export interface GameOverPayload {
+  winnerPlayerId: string
+  reason: 'all_sunk' | 'forfeit' | 'disconnect_timeout' | 'abandoned' | string
+  totalShots: number
+}
+
 export interface RoomStatePayload {
   roomId: string
   phase: RoomPhase
@@ -120,6 +176,11 @@ export interface RoomStatePayload {
   fleetConfirmed?: boolean
   opponentConfirmed?: boolean
   ownFleet?: PlacedShip[]
+  turnPlayerId?: string
+  turnDeadline?: string
+  battleView?: PlayerBattleView
+  winnerPlayerId?: string
+  endReason?: string
 }
 
 export interface RoomReadyStatePayload {
@@ -144,6 +205,11 @@ export const ErrorCode = {
   NotInPlacement: 'NOT_IN_PLACEMENT',
   FleetAlreadyLocked: 'FLEET_ALREADY_LOCKED',
   InvalidPlacement: 'INVALID_PLACEMENT',
+  NotInBattle: 'NOT_IN_BATTLE',
+  NotYourTurn: 'NOT_YOUR_TURN',
+  CellAlreadyTargeted: 'CELL_ALREADY_TARGETED',
+  InvalidCoordinate: 'INVALID_COORDINATE',
+  GameOver: 'GAME_OVER',
 } as const
 
 export type ErrorCodeType = (typeof ErrorCode)[keyof typeof ErrorCode] | string

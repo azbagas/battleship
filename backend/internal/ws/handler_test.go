@@ -921,7 +921,25 @@ func TestWebSocket_PlacementSubmitAndMutualConfirmation(t *testing.T) {
 		t.Fatalf("host expected placement.opponentReady, got %s", tHOpp)
 	}
 
-	// Both receive room.state transitioning to PhaseBattle
+	// Both receive battle.start, battle.turn, and room.state transitioning to PhaseBattle
+	tHStart, _ := readEnvelope(t, ctx, connHost)
+	if tHStart != TypeBattleStart {
+		t.Fatalf("host expected battle.start, got %s", tHStart)
+	}
+	tGStart, _ := readEnvelope(t, ctx, connGuest)
+	if tGStart != TypeBattleStart {
+		t.Fatalf("guest expected battle.start, got %s", tGStart)
+	}
+
+	tHTurn, _ := readEnvelope(t, ctx, connHost)
+	if tHTurn != TypeBattleTurn {
+		t.Fatalf("host expected battle.turn, got %s", tHTurn)
+	}
+	tGTurn, _ := readEnvelope(t, ctx, connGuest)
+	if tGTurn != TypeBattleTurn {
+		t.Fatalf("guest expected battle.turn, got %s", tGTurn)
+	}
+
 	tHBattle, pHBattle := readEnvelope(t, ctx, connHost)
 	if tHBattle != TypeRoomState {
 		t.Fatalf("host expected room.state battle transition, got %s", tHBattle)
@@ -941,4 +959,176 @@ func TestWebSocket_PlacementSubmitAndMutualConfirmation(t *testing.T) {
 	if gBattleState.Phase != lobby.PhaseBattle {
 		t.Fatalf("expected guest battle phase, got %s", gBattleState.Phase)
 	}
+}
+
+func testFleetForWS() []game.PlacedShip {
+	return []game.PlacedShip{
+		{Type: game.ShipCarrier, Origin: game.Coord{X: 0, Y: 0}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipBattleship, Origin: game.Coord{X: 0, Y: 1}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipCruiser, Origin: game.Coord{X: 0, Y: 2}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipSubmarine, Origin: game.Coord{X: 0, Y: 3}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipDestroyer, Origin: game.Coord{X: 0, Y: 4}, Orientation: game.OrientationHorizontal},
+	}
+}
+
+func testGuestFleetForWS() []game.PlacedShip {
+	return []game.PlacedShip{
+		{Type: game.ShipCarrier, Origin: game.Coord{X: 5, Y: 0}, Orientation: game.OrientationVertical},
+		{Type: game.ShipBattleship, Origin: game.Coord{X: 6, Y: 0}, Orientation: game.OrientationVertical},
+		{Type: game.ShipCruiser, Origin: game.Coord{X: 7, Y: 0}, Orientation: game.OrientationVertical},
+		{Type: game.ShipSubmarine, Origin: game.Coord{X: 8, Y: 0}, Orientation: game.OrientationVertical},
+		{Type: game.ShipDestroyer, Origin: game.Coord{X: 9, Y: 0}, Orientation: game.OrientationVertical},
+	}
+}
+
+func TestWebSocket_BattleFireAndTurnLoop(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	server, _, _ := setupTestServer(t)
+
+	connHost, playerHost, _ := connectAndHandshake(t, ctx, server.URL, "HostShooter", "")
+	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Host creates room
+	createMsg, _ := json.Marshal(OutboundMessage{Type: TypeLobbyCreate, Payload: map[string]any{}})
+	_ = connHost.Write(ctx, websocket.MessageText, createMsg)
+	_, pHostState := readEnvelope(t, ctx, connHost)
+	var hostRoomState lobby.RoomStateView
+	_ = json.Unmarshal(pHostState, &hostRoomState)
+
+	// Guest connects and joins
+	connGuest, playerGuest, _ := connectAndHandshake(t, ctx, server.URL, "GuestShooter", "")
+	defer func() { _ = connGuest.Close(websocket.StatusNormalClosure, "done") }()
+
+	joinMsg, _ := json.Marshal(OutboundMessage{Type: TypeLobbyJoin, Payload: LobbyJoinPayload{RoomID: hostRoomState.RoomID}})
+	_ = connGuest.Write(ctx, websocket.MessageText, joinMsg)
+	_, _ = readEnvelope(t, ctx, connGuest) // guest room.state
+	_, _ = readEnvelope(t, ctx, connGuest) // guest room.readyState
+	_, _ = readEnvelope(t, ctx, connHost)  // host room.state
+	_, _ = readEnvelope(t, ctx, connHost)  // host room.readyState
+
+	// Ready-up
+	readyMsg, _ := json.Marshal(OutboundMessage{Type: TypeRoomReady, Payload: map[string]any{}})
+	_ = connHost.Write(ctx, websocket.MessageText, readyMsg)
+	_, _ = readEnvelope(t, ctx, connHost)  // host readyState
+	_, _ = readEnvelope(t, ctx, connGuest) // guest readyState
+
+	_ = connGuest.Write(ctx, websocket.MessageText, readyMsg)
+	_, _ = readEnvelope(t, ctx, connHost)  // host readyState
+	_, _ = readEnvelope(t, ctx, connGuest) // guest readyState
+	_, _ = readEnvelope(t, ctx, connHost)  // host room.state (placement)
+	_, _ = readEnvelope(t, ctx, connGuest) // guest room.state (placement)
+
+	// Both submit fleets
+	fleetHost := testFleetForWS()
+	fleetGuest := testGuestFleetForWS()
+
+	subHost, _ := json.Marshal(OutboundMessage{Type: TypePlacementSubmit, Payload: PlacementSubmitPayload{Ships: fleetHost}})
+	_ = connHost.Write(ctx, websocket.MessageText, subHost)
+	_, _ = readEnvelope(t, ctx, connHost)  // placement.confirmed
+	_, _ = readEnvelope(t, ctx, connGuest) // placement.opponentReady
+
+	subGuest, _ := json.Marshal(OutboundMessage{Type: TypePlacementSubmit, Payload: PlacementSubmitPayload{Ships: fleetGuest}})
+	_ = connGuest.Write(ctx, websocket.MessageText, subGuest)
+	_, _ = readEnvelope(t, ctx, connGuest) // placement.confirmed
+	_, _ = readEnvelope(t, ctx, connHost)  // placement.opponentReady
+
+	// Both receive battle.start and battle.turn
+	tStartH, _ := readEnvelope(t, ctx, connHost)
+	if tStartH != TypeBattleStart {
+		t.Fatalf("expected battle.start on host, got %s", tStartH)
+	}
+	tStartG, _ := readEnvelope(t, ctx, connGuest)
+	if tStartG != TypeBattleStart {
+		t.Fatalf("expected battle.start on guest, got %s", tStartG)
+	}
+
+	tTurnH, pTurnH := readEnvelope(t, ctx, connHost)
+	if tTurnH != TypeBattleTurn {
+		t.Fatalf("expected battle.turn on host, got %s", tTurnH)
+	}
+	tTurnG, _ := readEnvelope(t, ctx, connGuest)
+	if tTurnG != TypeBattleTurn {
+		t.Fatalf("expected battle.turn on guest, got %s", tTurnG)
+	}
+
+	tStateH, _ := readEnvelope(t, ctx, connHost)
+	if tStateH != TypeRoomState {
+		t.Fatalf("expected room.state on host, got %s", tStateH)
+	}
+	tStateG, _ := readEnvelope(t, ctx, connGuest)
+	if tStateG != TypeRoomState {
+		t.Fatalf("expected room.state on guest, got %s", tStateG)
+	}
+
+	var turnPayload BattleTurnPayload
+	if err := json.Unmarshal(pTurnH, &turnPayload); err != nil {
+		t.Fatalf("failed to unmarshal turnPayload: %v", err)
+	}
+	if turnPayload.TurnPlayerID == "" {
+		t.Fatalf("turnPlayerId is empty in turnPayload: %s", string(pTurnH))
+	}
+
+	firstConn := connHost
+	firstID := playerHost.PlayerID
+	secondConn := connGuest
+	secondID := playerGuest.PlayerID
+	if turnPayload.TurnPlayerID == playerGuest.PlayerID {
+		firstConn = connGuest
+		firstID = playerGuest.PlayerID
+		secondConn = connHost
+		secondID = playerHost.PlayerID
+	}
+
+	// 1. Inactive player fires out of turn -> returns NOT_YOUR_TURN error
+	badFire, _ := json.Marshal(OutboundMessage{Type: TypeBattleFire, Payload: BattleFirePayload{Cell: game.Coord{X: 0, Y: 0}}})
+	_ = secondConn.Write(ctx, websocket.MessageText, badFire)
+	tErr, pErr := readEnvelope(t, ctx, secondConn)
+	if tErr != TypeError {
+		t.Fatalf("expected error message on out-of-turn fire, got %s", tErr)
+	}
+	var errPayload ErrorPayload
+	_ = json.Unmarshal(pErr, &errPayload)
+	if errPayload.Code != ErrCodeNotYourTurn {
+		t.Errorf("expected NOT_YOUR_TURN code, got %s", errPayload.Code)
+	}
+
+	// 2. Active player fires valid shot at (0, 9)
+	validFire, _ := json.Marshal(OutboundMessage{Type: TypeBattleFire, Payload: BattleFirePayload{Cell: game.Coord{X: 0, Y: 9}}})
+	_ = firstConn.Write(ctx, websocket.MessageText, validFire)
+
+	// Both receive battle.shotResult
+	tRes1, pRes1 := readEnvelope(t, ctx, firstConn)
+	if tRes1 != TypeBattleShotResult {
+		t.Fatalf("expected battle.shotResult on first conn, got %s", tRes1)
+	}
+	var res1 BattleShotResultPayload
+	_ = json.Unmarshal(pRes1, &res1)
+	if res1.By != firstID {
+		t.Errorf("expected shooter %s, got %s", firstID, res1.By)
+	}
+	if res1.Result != game.ShotResultMiss {
+		t.Errorf("expected miss at (0,9), got %s", res1.Result)
+	}
+
+	tRes2, _ := readEnvelope(t, ctx, secondConn)
+	if tRes2 != TypeBattleShotResult {
+		t.Fatalf("expected battle.shotResult on second conn, got %s", tRes2)
+	}
+
+	// Both receive battle.turn for second player
+	tNextTurn1, pNextTurn1 := readEnvelope(t, ctx, firstConn)
+	if tNextTurn1 != TypeBattleTurn {
+		t.Fatalf("expected battle.turn on first conn, got %s", tNextTurn1)
+	}
+	var nextTurn1 BattleTurnPayload
+	_ = json.Unmarshal(pNextTurn1, &nextTurn1)
+	if nextTurn1.TurnPlayerID != secondID {
+		t.Errorf("expected turn to switch to %s, got %s", secondID, nextTurn1.TurnPlayerID)
+	}
+
+	_, _ = readEnvelope(t, ctx, secondConn) // battle.turn
+	_, _ = readEnvelope(t, ctx, firstConn)  // room.state
+	_, _ = readEnvelope(t, ctx, secondConn) // room.state
 }

@@ -1,5 +1,14 @@
 import { createContext, useContext } from 'react'
-import { PlacedShip, RoomStatePayload, WaitingRoomView } from '../types/protocol'
+import {
+  BattleShotResultPayload,
+  Coord,
+  GameOverPayload,
+  PlacedShip,
+  RoomStatePayload,
+  ShotResult,
+  SunkShipInfo,
+  WaitingRoomView,
+} from '../types/protocol'
 
 export interface ReadyState {
   hostReady: boolean
@@ -34,6 +43,18 @@ export interface LobbyContextValue {
   ownFleet: PlacedShip[]
   placementDeadline: string | null
   submitFleet: (ships: PlacedShip[]) => void
+
+  // Battle phase controls & state
+  turnPlayerId: string | null
+  turnDeadline: string | null
+  isMyTurn: boolean
+  targetShots: Map<string, ShotResult>
+  ownShots: Map<string, ShotResult>
+  opponentSunkShips: SunkShipInfo[]
+  ownSunkShips: SunkShipInfo[]
+  recentEvents: BattleShotResultPayload[]
+  gameOverResult: GameOverPayload | null
+  fireShot: (cell: Coord) => void
 }
 
 export const LobbyContext = createContext<LobbyContextValue | undefined>(undefined)

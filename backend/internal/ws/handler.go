@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/azbagas/battleship/backend/internal/game"
 	"github.com/azbagas/battleship/backend/internal/lobby"
 )
 
@@ -199,6 +200,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err := h.lobby.SubmitFleet(player.ID, submitPayload.Ships); err != nil {
 				h.handleLobbyError(sender, player.ID, inbound.Type, err)
 			}
+		case TypeBattleFire:
+			var firePayload BattleFirePayload
+			if len(inbound.Payload) > 0 && string(inbound.Payload) != "null" && string(inbound.Payload) != "{}" {
+				if err := json.Unmarshal(inbound.Payload, &firePayload); err != nil {
+					slog.Warn("invalid battle fire payload", "playerId", player.ID, "error", err)
+					_ = sendError(sender, ErrCodeBadRequest, "Invalid battle fire payload: malformed coordinate")
+					continue
+				}
+			}
+			if err := h.lobby.FireShot(player.ID, firePayload.Cell); err != nil {
+				h.handleLobbyError(sender, player.ID, inbound.Type, err)
+			}
 		default:
 			slog.Debug("unhandled message type", "playerId", player.ID, "type", inbound.Type)
 		}
@@ -231,6 +244,16 @@ func (h *Handler) handleLobbyError(sender *wsSender, playerID string, action Mes
 		code = ErrCodeFleetAlreadyLocked
 	case errors.Is(err, lobby.ErrInvalidPlacement):
 		code = ErrCodeInvalidPlacement
+	case errors.Is(err, lobby.ErrNotInBattle):
+		code = ErrCodeNotInBattle
+	case errors.Is(err, lobby.ErrNotYourTurn):
+		code = ErrCodeNotYourTurn
+	case errors.Is(err, lobby.ErrGameOver):
+		code = ErrCodeGameOver
+	case errors.Is(err, game.ErrCellAlreadyTargeted):
+		code = ErrCodeCellAlreadyTargeted
+	case errors.Is(err, game.ErrCellOutOfBounds):
+		code = ErrCodeCellOutOfBounds
 	}
 	slog.Warn("lobby action rejected", "playerId", playerID, "action", string(action), "code", code, "error", err)
 	_ = sendError(sender, code, err.Error())
