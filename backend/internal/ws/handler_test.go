@@ -477,30 +477,32 @@ func TestWebSocket_SimultaneousJoinRace(t *testing.T) {
 		Payload: LobbyJoinPayload{RoomID: roomID},
 	})
 
+	readJoinResponse := func(conn *websocket.Conn) (MessageType, string) {
+		for {
+			mType, p := readEnvelope(t, ctx, conn)
+			if mType == TypeRoomState {
+				return mType, ""
+			}
+			if mType == TypeError {
+				var ep ErrorPayload
+				_ = json.Unmarshal(p, &ep)
+				return mType, ep.Code
+			}
+		}
+	}
+
 	go func() {
 		defer wg.Done()
 		<-barrier
 		_ = connJ1.Write(ctx, websocket.MessageText, joinPayload)
-		mType, p := readEnvelope(t, ctx, connJ1)
-		j1Result = mType
-		if mType == TypeError {
-			var ep ErrorPayload
-			_ = json.Unmarshal(p, &ep)
-			j1ErrCode = ep.Code
-		}
+		j1Result, j1ErrCode = readJoinResponse(connJ1)
 	}()
 
 	go func() {
 		defer wg.Done()
 		<-barrier
 		_ = connJ2.Write(ctx, websocket.MessageText, joinPayload)
-		mType, p := readEnvelope(t, ctx, connJ2)
-		j2Result = mType
-		if mType == TypeError {
-			var ep ErrorPayload
-			_ = json.Unmarshal(p, &ep)
-			j2ErrCode = ep.Code
-		}
+		j2Result, j2ErrCode = readJoinResponse(connJ2)
 	}()
 
 	close(barrier)

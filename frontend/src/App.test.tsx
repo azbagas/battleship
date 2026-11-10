@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import App from './App'
 import { sessionStore } from './services/storage'
-import { ErrorCode } from './types/protocol'
+import { ErrorCode, RoomStatePayload, WaitingRoomView } from './types/protocol'
 
 class MockWebSocket {
   static instances: MockWebSocket[] = []
@@ -67,7 +67,7 @@ describe('App & Session Lifecycle', () => {
     globalThis.WebSocket = originalWebSocket
   })
 
-  it('allows a new player to enter a display name, connects, and receives session identity', async () => {
+  it('allows a new player to enter a display name, connects, and reaches the Lobby', async () => {
     render(<App />)
 
     // Verify initial home screen
@@ -91,19 +91,25 @@ describe('App & Session Lifecycle', () => {
     expect(helloSent.type).toBe('hello')
     expect(helloSent.payload.name).toBe('Admiral Yi')
 
-    // Simulate backend response hello.ok
+    // Simulate backend response hello.ok and lobby.snapshot
     ws.receive('hello.ok', {
       playerId: 'player-yi-101',
       sessionToken: 'token-yi-secret',
       displayName: 'Admiral Yi',
       restoredState: null,
     })
+    ws.receive('lobby.snapshot', {
+      rooms: [],
+      totalRooms: 0,
+      maxRooms: 10,
+    })
 
-    // Commander identity card should now be visible
+    // Player is now in the Lobby screen
     await waitFor(() => {
+      expect(screen.getByText('Public Battle Lobby')).toBeInTheDocument()
       expect(screen.getByText('Admiral Yi')).toBeInTheDocument()
-      expect(screen.getByText(/ID: player-y.../i)).toBeInTheDocument()
-      expect(screen.getByText(/Connected/i)).toBeInTheDocument()
+      expect(screen.getByText('No Active Waiting Rooms')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Create Game/i })).toBeInTheDocument()
     })
 
     // Verify localStorage was updated
@@ -112,13 +118,11 @@ describe('App & Session Lifecycle', () => {
     expect(saved.sessionToken).toBe('token-yi-secret')
   })
 
-  it('automatically restores session from localStorage across page refresh', async () => {
-    // Pre-populate localStorage as if player refreshed page
+  it('automatically restores session from localStorage across page refresh into Lobby', async () => {
     sessionStore.saveSession('saved-token-999', 'Commander Spock')
 
     render(<App />)
 
-    // Should immediately attempt to reconnect with saved credentials
     await waitFor(() => {
       expect(MockWebSocket.instances.length).toBe(1)
     })
@@ -133,17 +137,30 @@ describe('App & Session Lifecycle', () => {
     expect(helloSent.payload.name).toBe('Commander Spock')
     expect(helloSent.payload.sessionToken).toBe('saved-token-999')
 
-    // Simulate backend confirming restoration
+    // Server restores into lobby with 1 existing waiting room
+    const waitingRoom: WaitingRoomView = {
+      id: 'r_existing',
+      hostName: 'Captain Kirk',
+      createdAt: new Date().toISOString(),
+    }
+
     ws.receive('hello.ok', {
       playerId: 'spock-id-77',
       sessionToken: 'saved-token-999',
       displayName: 'Commander Spock',
       restoredState: null,
     })
+    ws.receive('lobby.snapshot', {
+      rooms: [waitingRoom],
+      totalRooms: 1,
+      maxRooms: 10,
+    })
 
     await waitFor(() => {
+      expect(screen.getByText('Public Battle Lobby')).toBeInTheDocument()
       expect(screen.getByText('Commander Spock')).toBeInTheDocument()
-      expect(screen.getByText(/Session restored across refresh/i)).toBeInTheDocument()
+      expect(screen.getByText('Captain Kirk')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Join' })).toBeInTheDocument()
     })
   })
 
@@ -161,7 +178,6 @@ describe('App & Session Lifecycle', () => {
       expect(ws.sentMessages.length).toBe(1)
     })
 
-    // Server rejects duplicate session
     ws.receive('error', {
       code: ErrorCode.SessionAlreadyActive,
       message: 'Session is already active in another connection',
@@ -172,13 +188,153 @@ describe('App & Session Lifecycle', () => {
       expect(screen.getByText(/Session Active in Another Tab/i)).toBeInTheDocument()
     })
 
-    // User clicks "Start Fresh Session"
     const freshBtn = screen.getByRole('button', { name: /Start Fresh Session/i })
     fireEvent.click(freshBtn)
 
-    // Token should be cleared from storage
     expect(sessionStore.loadSession().sessionToken).toBeNull()
-    // Returns to form with saved name prefilled
     expect(screen.getByLabelText(/Callsign \/ Display Name/i)).toHaveValue('Captain Kirk')
+  })
+
+  it('allows host to create a room, see the Host Waiting Room UI, and cancel it', async () => {
+    sessionStore.saveSession('token-host', 'Admiral Nimitz')
+    render(<App />)
+
+    await waitFor(() => expect(MockWebSocket.instances.length).toBe(1))
+    const ws = MockWebSocket.instances[0]
+
+    ws.receive('hello.ok', {
+      playerId: 'p_host',
+      sessionToken: 'token-host',
+      displayName: 'Admiral Nimitz',
+      restoredState: null,
+    })
+    ws.receive('lobby.snapshot', {
+      rooms: [],
+      totalRooms: 0,
+      maxRooms: 10,
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Create Game/i })).toBeInTheDocument()
+    })
+
+    // Click Create Game
+    fireEvent.click(screen.getByRole('button', { name: /Create Game/i }))
+
+    await waitFor(() => {
+      const lastMsg = JSON.parse(ws.sentMessages[ws.sentMessages.length - 1])
+      expect(lastMsg.type).toBe('lobby.create')
+    })
+
+    // Server sends room.state (waiting phase)
+    const roomState: RoomStatePayload = {
+      roomId: 'r_nimitz100',
+      phase: 'waiting',
+      role: 'host',
+      host: { id: 'p_host', name: 'Admiral Nimitz' },
+      createdAt: new Date().toISOString(),
+    }
+    ws.receive('room.state', roomState)
+
+    // Now in WaitingRoomScreen
+    await waitFor(() => {
+      expect(screen.getByText('Host Waiting Room')).toBeInTheDocument()
+      expect(screen.getByText('Waiting for an opponent')).toBeInTheDocument()
+      expect(screen.getByText('r_nimitz100')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Cancel Game & Return to Lobby/i })).toBeInTheDocument()
+    })
+
+    // Click Cancel Game
+    fireEvent.click(screen.getByRole('button', { name: /Cancel Game & Return to Lobby/i }))
+
+    await waitFor(() => {
+      const lastMsg = JSON.parse(ws.sentMessages[ws.sentMessages.length - 1])
+      expect(lastMsg.type).toBe('lobby.cancel')
+    })
+
+    // Server cancels room and sends updated lobby snapshot
+    ws.receive('lobby.snapshot', {
+      rooms: [],
+      totalRooms: 0,
+      maxRooms: 10,
+    })
+
+    // Returned back to LobbyScreen
+    await waitFor(() => {
+      expect(screen.getByText('Public Battle Lobby')).toBeInTheDocument()
+      expect(screen.getByText('No Active Waiting Rooms')).toBeInTheDocument()
+    })
+  })
+
+  it('updates live with lobby.update and allows joining a room to advance to ready-up', async () => {
+    sessionStore.saveSession('token-guest', 'Captain Picard')
+    render(<App />)
+
+    await waitFor(() => expect(MockWebSocket.instances.length).toBe(1))
+    const ws = MockWebSocket.instances[0]
+
+    ws.receive('hello.ok', {
+      playerId: 'p_guest',
+      sessionToken: 'token-guest',
+      displayName: 'Captain Picard',
+      restoredState: null,
+    })
+    ws.receive('lobby.snapshot', {
+      rooms: [],
+      totalRooms: 0,
+      maxRooms: 10,
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('No Active Waiting Rooms')).toBeInTheDocument()
+    })
+
+    // Another player creates a room -> lobby.update broadcast arrives
+    const newRoom: WaitingRoomView = {
+      id: 'r_host999',
+      hostName: 'Admiral Riker',
+      createdAt: new Date().toISOString(),
+    }
+    ws.receive('lobby.update', {
+      action: 'upsert',
+      room: newRoom,
+      totalRooms: 1,
+      maxRooms: 10,
+    })
+
+    // Riker's room appears live without manual refresh
+    await waitFor(() => {
+      expect(screen.getByText('Admiral Riker')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Join' })).toBeInTheDocument()
+    })
+
+    // Click Join
+    fireEvent.click(screen.getByRole('button', { name: 'Join' }))
+
+    await waitFor(() => {
+      const lastMsg = JSON.parse(ws.sentMessages[ws.sentMessages.length - 1])
+      expect(lastMsg.type).toBe('lobby.join')
+      expect(lastMsg.payload.roomId).toBe('r_host999')
+    })
+
+    // Server confirms join -> room.state with phase: ready-up
+    const joinedState: RoomStatePayload = {
+      roomId: 'r_host999',
+      phase: 'ready-up',
+      role: 'guest',
+      opponentName: 'Admiral Riker',
+      host: { id: 'p_riker', name: 'Admiral Riker' },
+      guest: { id: 'p_guest', name: 'Captain Picard' },
+      createdAt: new Date().toISOString(),
+    }
+    ws.receive('room.state', joinedState)
+
+    // Matched screen is displayed
+    await waitFor(() => {
+      expect(screen.getByText('Combat Sector Matched')).toBeInTheDocument()
+      expect(screen.getByText('OPPONENT CONNECTED')).toBeInTheDocument()
+      expect(screen.getByText('Admiral Riker')).toBeInTheDocument()
+      expect(screen.getByText('Captain Picard')).toBeInTheDocument()
+    })
   })
 })

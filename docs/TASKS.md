@@ -10,7 +10,7 @@ Blocked: nothing
 
 Known issues: none
 
-Next up: T-05 [F-02] Build frontend Lobby screen and Host Waiting Room UI showing live waiting rooms (oldest first with host name and wait duration), empty state, **Create game**, **Join**, **Cancel**, and disabled state when the 10-room cap is reached.
+Next up: T-06 [F-03] Implement backend `ready-up` room phase (`room.ready`, `room.unready`, `room.readyState`) and leave/disconnect handling during ready-up (returning room to lobby if guest leaves, or closing room if host leaves).
 
 <!-- Update this block at the end of every session. If it passes ~15 lines, move it to STATUS.md. -->
 
@@ -29,7 +29,7 @@ Next up: T-05 [F-02] Build frontend Lobby screen and Host Waiting Room UI showin
 ### F-02 Live Public Lobby
 - [x] T-04 [F-02] Implement backend in-memory lobby manager (`lobby.create`, `lobby.cancel`, atomic `lobby.join`, `lobby.snapshot`, `lobby.update`) enforcing one active game per player and the 10-room global cap.
   Done when: unit and `-race` concurrency tests confirm real-time lobby broadcasts, atomic simultaneous joins (exactly one succeeds), host cancel, and 10-room cap enforcement.
-- [ ] T-05 [F-02] Build frontend Lobby screen and Host Waiting Room UI showing live waiting rooms (oldest first with host name and wait duration), empty state, **Create game**, **Join**, **Cancel**, and disabled state when the 10-room cap is reached.
+- [x] T-05 [F-02] Build frontend Lobby screen and Host Waiting Room UI showing live waiting rooms (oldest first with host name and wait duration), empty state, **Create game**, **Join**, **Cancel**, and disabled state when the 10-room cap is reached.
   Done when: creating, cancelling, and joining rooms update live across two connected browsers without manual refresh.
 
 ### F-03 Pre-Game Ready-Up
@@ -92,6 +92,7 @@ Next up: T-05 [F-02] Build frontend Lobby screen and Host Waiting Room UI showin
 - 2026-11-09: T-02 implemented using `github.com/coder/websocket`; unrecognized session token in `hello` gracefully issues a new session with fresh tokens to handle server restarts seamlessly.
 - 2026-11-09: T-03 frontend implemented with React 19 context + WebSocket client wrapper; handles automatic session restoration from `localStorage`, reverse proxies `/ws` in Vite dev and Nginx, and halts reconnection on `SESSION_ALREADY_ACTIVE` with an explicit resolution CTA.
 - 2026-11-09: T-04 implemented with in-memory LobbyManager, thread-safe Clock abstraction, and mutex-serialized room transitions outside network I/O; snapshot & update broadcasts carry totalRooms & maxRooms to enforce and expose the 10-room global cap to clients.
+- 2026-11-09: T-05 frontend implemented with LobbyProvider, useElapsedTime ticker, live LobbyScreen with room capacity meter, and Host WaitingRoomScreen with animated sonar radar; room cap reaches disable Create Game with explanatory tooltip and alert.
 
 ## Archive
 <!-- Move finished version groups here as one-line summaries, e.g. "v1 shipped: F-01 to F-03." -->
