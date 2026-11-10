@@ -14,8 +14,8 @@ A browser-based, real-time, two-player online Battleship game built as a React/T
 
 ## Commands
 ```
-Install:  cd frontend && npm install && cd ../backend && go mod download
-Run dev:  docker compose up --build   # or run `go run ./cmd/server` in backend/ and `npm run dev` in frontend/
+Install:  npm run install:all        # or cd frontend && npm install && cd ../backend && go mod download
+Run dev:  npm run dev                # or docker compose up --build
 Test:     cd backend && go test -race ./... && cd ../frontend && npm test
 Lint:     cd backend && golangci-lint run && cd ../frontend && npm run lint
 Build:    cd backend && go build ./cmd/server && cd ../frontend && npm run build

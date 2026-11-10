@@ -16,18 +16,24 @@ A browser-based, real-time, two-player online Battleship game built as a React/T
 
 ### Install
 ```bash
-cd frontend && npm install && cd ../backend && go mod download
+npm run install:all
+# or install individually:
+# npm install && cd frontend && npm install && cd ../backend && go mod download
 ```
 
 ### Run Locally
-Backend:
+Run both backend and frontend concurrently with a single command:
 ```bash
-cd backend
-go run ./cmd/server
+npm run dev
 ```
 
-Frontend:
+Or run them in separate terminals if preferred:
 ```bash
+# Backend:
+cd backend
+go run ./cmd/server
+
+# Frontend:
 cd frontend
 npm run dev
 ```

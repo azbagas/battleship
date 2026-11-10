@@ -19,6 +19,8 @@ Next up: T-06 [F-03] Implement backend `ready-up` room phase (`room.ready`, `roo
 ### Setup
 - [x] T-01 [setup] Scaffold monorepo (`backend/` Go module, `frontend/` Vite + React + TypeScript, `docker-compose.yml`), test runners, linters, and `/healthz` endpoint.
   Done when: `go test ./...`, frontend test/lint/build commands, and `GET /healthz` all succeed locally and via Docker Compose.
+- [x] T-01b [setup] Add root dev orchestrator script with `concurrently` to run frontend and backend simultaneously via a single `npm run dev` command.
+  Done when: `npm run dev` starts both backend and frontend concurrently in one terminal with color-coded labels and clean shutdown, and README.md and AGENTS.md are updated.
 
 ### F-01 Display Name & Session Identity
 - [x] T-02 [F-01] Implement backend session registry, WebSocket handshake (`hello` / `hello.ok`), display name sanitization (1–20 trimmed chars, control chars stripped), and single-active-connection rule per session token.
@@ -97,6 +99,7 @@ Next up: T-06 [F-03] Implement backend `ready-up` room phase (`room.ready`, `roo
 - 2026-11-09: T-05 frontend implemented with LobbyProvider, useElapsedTime ticker, live LobbyScreen with room capacity meter, and Host WaitingRoomScreen with animated sonar radar; room cap reaches disable Create Game with explanatory tooltip and alert.
 - 2026-11-10: T-05b implemented with structured `log/slog` logging across WebSocket transport, session authentication, and lobby/room lifecycles. Default log level is `INFO` (configurable via `LOG_LEVEL`) and text/json format (configurable via `LOG_FORMAT`); session tokens are redacted to protect security.
 - 2026-11-10: Hardened `WebSocketClient.connect` to be idempotent for identical connection options and cleanly detach/close obsolete socket instances before opening new ones, preventing ghost socket timeouts and false session collision triggers under React StrictMode.
+- 2026-11-10: T-01b added root package.json orchestrator with `concurrently` to run backend and frontend simultaneously with color-coded logs and graceful SIGINT cleanup via `npm run dev`.
 
 ## Archive
 <!-- Move finished version groups here as one-line summaries, e.g. "v1 shipped: F-01 to F-03." -->
