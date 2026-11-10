@@ -6,7 +6,9 @@ import { ErrorCode, RoomStatePayload, WaitingRoomView } from './types/protocol'
 
 class MockWebSocket {
   static instances: MockWebSocket[] = []
+  static CONNECTING = 0
   static OPEN = 1
+  static CLOSING = 2
   static CLOSED = 3
 
   readyState = MockWebSocket.OPEN

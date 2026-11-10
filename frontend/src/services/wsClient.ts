@@ -87,7 +87,24 @@ export class WebSocketClient {
   }
 
   connect(options: ConnectOptions): void {
-    this.connectOptions = options
+    const isConnectingOrOpen =
+      this.ws &&
+      (this.ws.readyState === (WebSocket.CONNECTING ?? 0) ||
+        this.ws.readyState === (WebSocket.OPEN ?? 1))
+
+    if (
+      isConnectingOrOpen &&
+      this.connectOptions &&
+      this.connectOptions.displayName === options.displayName &&
+      (this.connectOptions.sessionToken ?? null) === (options.sessionToken ?? null) &&
+      (this.connectOptions.url ?? null) === (options.url ?? null)
+    ) {
+      return
+    }
+
+    this.closeCurrentWebSocket()
+
+    this.connectOptions = { ...options }
     this.isExplicitDisconnect = false
     this.hasSessionConflict = false
     this.clearReconnectTimer()
@@ -98,19 +115,28 @@ export class WebSocketClient {
   disconnect(): void {
     this.isExplicitDisconnect = true
     this.clearReconnectTimer()
-    if (this.ws) {
-      // Avoid firing close reconnect logic
-      this.ws.onclose = null
-      this.ws.onerror = null
-      this.ws.onmessage = null
-      this.ws.close()
-      this.ws = null
-    }
+    this.closeCurrentWebSocket()
     this.setStatus('disconnected')
   }
 
+  private closeCurrentWebSocket(): void {
+    if (this.ws) {
+      const oldWs = this.ws
+      this.ws = null
+      oldWs.onopen = null
+      oldWs.onerror = null
+      oldWs.onmessage = null
+      oldWs.onclose = null
+      try {
+        oldWs.close()
+      } catch (err) {
+        console.error('Error closing WebSocket:', err)
+      }
+    }
+  }
+
   send<T = unknown>(type: string, payload: T): boolean {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this.ws || this.ws.readyState !== (WebSocket.OPEN ?? 1)) {
       return false
     }
     const message: OutboundMessage<T> = { type, payload }
@@ -135,8 +161,9 @@ export class WebSocketClient {
     const url = resolveWebSocketUrl(this.connectOptions.url)
     this.setStatus('connecting')
 
+    let socket: WebSocket
     try {
-      this.ws = new WebSocket(url)
+      socket = new WebSocket(url)
     } catch (err) {
       console.error('Failed to construct WebSocket:', err)
       this.setStatus('error', 'Failed to initialize WebSocket')
@@ -144,19 +171,31 @@ export class WebSocketClient {
       return
     }
 
-    this.ws.onopen = () => {
+    this.ws = socket
+
+    socket.onopen = () => {
+      if (this.ws !== socket || !this.connectOptions) return
       this.reconnectAttempts = 0
       // Send hello handshake immediately
       const helloPayload: HelloPayload = {
-        name: this.connectOptions!.displayName,
-        ...(this.connectOptions!.sessionToken
-          ? { sessionToken: this.connectOptions!.sessionToken }
+        name: this.connectOptions.displayName,
+        ...(this.connectOptions.sessionToken
+          ? { sessionToken: this.connectOptions.sessionToken }
           : {}),
       }
-      this.send('hello', helloPayload)
+      const message: OutboundMessage<HelloPayload> = {
+        type: 'hello',
+        payload: helloPayload,
+      }
+      try {
+        socket.send(JSON.stringify(message))
+      } catch (err) {
+        console.error('Failed to send hello handshake:', err)
+      }
     }
 
-    this.ws.onmessage = (event: MessageEvent) => {
+    socket.onmessage = (event: MessageEvent) => {
+      if (this.ws !== socket) return
       if (typeof event.data !== 'string') return
 
       try {
@@ -167,12 +206,15 @@ export class WebSocketClient {
       }
     }
 
-    this.ws.onerror = () => {
+    socket.onerror = () => {
+      if (this.ws !== socket) return
       this.setStatus('error', 'Connection error')
     }
 
-    this.ws.onclose = (event: CloseEvent) => {
+    socket.onclose = (event: CloseEvent) => {
+      if (this.ws !== socket) return
       this.ws = null
+
       if (this.isExplicitDisconnect) {
         this.setStatus('disconnected')
         return

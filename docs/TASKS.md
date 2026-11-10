@@ -96,6 +96,7 @@ Next up: T-06 [F-03] Implement backend `ready-up` room phase (`room.ready`, `roo
 - 2026-11-09: T-04 implemented with in-memory LobbyManager, thread-safe Clock abstraction, and mutex-serialized room transitions outside network I/O; snapshot & update broadcasts carry totalRooms & maxRooms to enforce and expose the 10-room global cap to clients.
 - 2026-11-09: T-05 frontend implemented with LobbyProvider, useElapsedTime ticker, live LobbyScreen with room capacity meter, and Host WaitingRoomScreen with animated sonar radar; room cap reaches disable Create Game with explanatory tooltip and alert.
 - 2026-11-10: T-05b implemented with structured `log/slog` logging across WebSocket transport, session authentication, and lobby/room lifecycles. Default log level is `INFO` (configurable via `LOG_LEVEL`) and text/json format (configurable via `LOG_FORMAT`); session tokens are redacted to protect security.
+- 2026-11-10: Hardened `WebSocketClient.connect` to be idempotent for identical connection options and cleanly detach/close obsolete socket instances before opening new ones, preventing ghost socket timeouts and false session collision triggers under React StrictMode.
 
 ## Archive
 <!-- Move finished version groups here as one-line summaries, e.g. "v1 shipped: F-01 to F-03." -->

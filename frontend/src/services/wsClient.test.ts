@@ -5,7 +5,9 @@ import { ErrorCode, HelloOKPayload, ErrorPayload } from '../types/protocol'
 // Mock WebSocket implementation
 class MockWebSocket {
   static instances: MockWebSocket[] = []
+  static CONNECTING = 0
   static OPEN = 1
+  static CLOSING = 2
   static CLOSED = 3
 
   readyState = MockWebSocket.OPEN
@@ -176,6 +178,40 @@ describe('WebSocketClient', () => {
     unsubscribe()
     mockWs.receiveServerMessage('custom.event', { foo: 'baz' })
     expect(customListener).toHaveBeenCalledTimes(1)
+  })
+
+  it('is idempotent when connect() is called repeatedly with identical options', async () => {
+    const client = new WebSocketClient()
+    client.connect({ displayName: 'Captain Nemo', sessionToken: 'tok_abc' })
+    client.connect({ displayName: 'Captain Nemo', sessionToken: 'tok_abc' })
+    client.connect({ displayName: 'Captain Nemo', sessionToken: 'tok_abc' })
+
+    expect(MockWebSocket.instances.length).toBe(1)
+    await vi.runAllTimersAsync()
+    expect(MockWebSocket.instances.length).toBe(1)
+  })
+
+  it('cleans up and closes previous socket when reconnecting with new options', async () => {
+    const client = new WebSocketClient()
+    client.connect({ displayName: 'OldName', sessionToken: 'tok_old' })
+    await vi.runAllTimersAsync()
+
+    expect(MockWebSocket.instances.length).toBe(1)
+    const firstWs = MockWebSocket.instances[0]
+
+    // Connect with a new name
+    client.connect({ displayName: 'NewName', sessionToken: 'tok_new' })
+    expect(firstWs.readyState).toBe(MockWebSocket.CLOSED)
+    expect(MockWebSocket.instances.length).toBe(2)
+
+    await vi.runAllTimersAsync()
+    const secondWs = MockWebSocket.instances[1]
+    expect(secondWs.sentMessages.length).toBe(1)
+    const sent = JSON.parse(secondWs.sentMessages[0])
+    expect(sent.payload).toEqual({
+      name: 'NewName',
+      sessionToken: 'tok_new',
+    })
   })
 })
 
