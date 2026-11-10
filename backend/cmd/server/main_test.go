@@ -67,3 +67,20 @@ func TestWSEndpoint_NonWebSocketRequest(t *testing.T) {
 	}
 }
 
+func TestInitLogger(t *testing.T) {
+	// Test default setup
+	t.Setenv("LOG_LEVEL", "DEBUG")
+	t.Setenv("LOG_FORMAT", "json")
+	initLogger()
+
+	t.Setenv("LOG_LEVEL", "WARN")
+	t.Setenv("LOG_FORMAT", "text")
+	initLogger()
+
+	t.Setenv("LOG_LEVEL", "ERROR")
+	initLogger()
+
+	t.Setenv("LOG_LEVEL", "")
+	initLogger()
+}
+

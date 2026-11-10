@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -41,7 +42,36 @@ func healthzHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// initLogger configures the default structured logger using environment variables.
+func initLogger() {
+	level := slog.LevelInfo
+	if lvlStr := os.Getenv("LOG_LEVEL"); lvlStr != "" {
+		switch strings.ToUpper(lvlStr) {
+		case "DEBUG":
+			level = slog.LevelDebug
+		case "INFO":
+			level = slog.LevelInfo
+		case "WARN":
+			level = slog.LevelWarn
+		case "ERROR":
+			level = slog.LevelError
+		}
+	}
+
+	opts := &slog.HandlerOptions{Level: level}
+	var handler slog.Handler
+	if strings.ToLower(os.Getenv("LOG_FORMAT")) == "json" {
+		handler = slog.NewJSONHandler(os.Stdout, opts)
+	} else {
+		handler = slog.NewTextHandler(os.Stdout, opts)
+	}
+
+	slog.SetDefault(slog.New(handler))
+}
+
 func main() {
+	initLogger()
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"

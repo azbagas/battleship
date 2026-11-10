@@ -69,12 +69,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		InsecureSkipVerify: true, // Origin verification is hardened in T-19.
 	})
 	if err != nil {
-		slog.Error("failed to accept websocket connection", "error", err)
+		slog.Error("failed to accept websocket connection", "remoteAddr", r.RemoteAddr, "error", err)
 		return
 	}
 	defer func() {
 		_ = conn.Close(websocket.StatusNormalClosure, "connection closed")
 	}()
+
+	slog.Debug("websocket connection accepted", "remoteAddr", r.RemoteAddr)
 
 	sender := &wsSender{conn: conn, ctx: r.Context()}
 
@@ -82,9 +84,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	handshakeCtx, cancelHandshake := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancelHandshake()
 
-	player, err := h.handleHandshake(handshakeCtx, conn, sender)
+	player, err := h.handleHandshake(handshakeCtx, conn, sender, r.RemoteAddr)
 	if err != nil {
-		// Handshake failed; error already written to client if possible, close and exit.
+		slog.Warn("websocket handshake failed", "remoteAddr", r.RemoteAddr, "error", err)
 		return
 	}
 
@@ -93,6 +95,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Detach connection and clean up lobby state when this connection terminates.
 	defer func() {
+		slog.Info("websocket connection closed", "playerId", player.ID, "remoteAddr", r.RemoteAddr)
 		h.lobby.UnsubscribeFromLobby(player.ID)
 		h.lobby.UnregisterConnection(player.ID)
 		h.lobby.HandleDisconnect(player.ID)
@@ -119,7 +122,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	if err := sender.Send(string(TypeHelloOK), helloOK.Payload); err != nil {
-		slog.Error("failed to write hello.ok", "error", err)
+		slog.Error("failed to write hello.ok", "playerId", player.ID, "error", err)
 		return
 	}
 
@@ -128,7 +131,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.lobby.SubscribeToLobby(player.ID)
 		snapshot := h.lobby.GetLobbySnapshot()
 		if err := sender.Send(string(TypeLobbySnapshot), snapshot); err != nil {
-			slog.Error("failed to write lobby.snapshot", "error", err)
+			slog.Error("failed to write lobby.snapshot", "playerId", player.ID, "error", err)
 			return
 		}
 	}
@@ -146,56 +149,61 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		var inbound InboundMessage
 		if err := json.Unmarshal(msgBytes, &inbound); err != nil {
+			slog.Warn("malformed inbound message", "playerId", player.ID, "error", err)
 			_ = sendError(sender, ErrCodeBadRequest, "Malformed message JSON")
 			continue
 		}
 
+		slog.Debug("websocket message received", "playerId", player.ID, "type", inbound.Type)
+
 		switch inbound.Type {
 		case TypeLobbyCreate:
 			if _, err := h.lobby.CreateRoom(player.ID); err != nil {
-				h.handleLobbyError(sender, err)
+				h.handleLobbyError(sender, player.ID, inbound.Type, err)
 			}
 		case TypeLobbyCancel:
 			if err := h.lobby.CancelRoom(player.ID); err != nil {
-				h.handleLobbyError(sender, err)
+				h.handleLobbyError(sender, player.ID, inbound.Type, err)
 			}
 		case TypeLobbyJoin:
 			var joinPayload LobbyJoinPayload
 			if err := json.Unmarshal(inbound.Payload, &joinPayload); err != nil || joinPayload.RoomID == "" {
+				slog.Warn("invalid join payload", "playerId", player.ID)
 				_ = sendError(sender, ErrCodeBadRequest, "Invalid join payload: roomId is required")
 				continue
 			}
 			if _, err := h.lobby.JoinRoom(player.ID, joinPayload.RoomID); err != nil {
-				h.handleLobbyError(sender, err)
+				h.handleLobbyError(sender, player.ID, inbound.Type, err)
 			}
 		default:
-			// Dispatched in future tasks (T-06 ready-up, T-09 placement, T-12 battle).
+			slog.Debug("unhandled message type", "playerId", player.ID, "type", inbound.Type)
 		}
 	}
 }
 
-// handleLobbyError translates lobby errors into protocol error codes.
-func (h *Handler) handleLobbyError(sender *wsSender, err error) {
+// handleLobbyError translates lobby errors into protocol error codes and logs the rejection.
+func (h *Handler) handleLobbyError(sender *wsSender, playerID string, action MessageType, err error) {
+	code := ErrCodeBadRequest
 	switch {
 	case errors.Is(err, lobby.ErrRoomCapReached):
-		_ = sendError(sender, ErrCodeRoomCapReached, err.Error())
+		code = ErrCodeRoomCapReached
 	case errors.Is(err, lobby.ErrAlreadyInRoom):
-		_ = sendError(sender, ErrCodeAlreadyInRoom, err.Error())
+		code = ErrCodeAlreadyInRoom
 	case errors.Is(err, lobby.ErrRoomNotFound):
-		_ = sendError(sender, ErrCodeRoomNotFound, err.Error())
+		code = ErrCodeRoomNotFound
 	case errors.Is(err, lobby.ErrRoomNotAvailable):
-		_ = sendError(sender, ErrCodeRoomNotAvailable, err.Error())
+		code = ErrCodeRoomNotAvailable
 	case errors.Is(err, lobby.ErrNotInWaitingRoom):
-		_ = sendError(sender, ErrCodeNotInWaitingRoom, err.Error())
+		code = ErrCodeNotInWaitingRoom
 	case errors.Is(err, lobby.ErrCannotJoinOwnRoom):
-		_ = sendError(sender, ErrCodeCannotJoinOwnRoom, err.Error())
-	default:
-		_ = sendError(sender, ErrCodeBadRequest, err.Error())
+		code = ErrCodeCannotJoinOwnRoom
 	}
+	slog.Warn("lobby action rejected", "playerId", playerID, "action", string(action), "code", code, "error", err)
+	_ = sendError(sender, code, err.Error())
 }
 
 // handleHandshake reads and processes the required hello handshake.
-func (h *Handler) handleHandshake(ctx context.Context, conn *websocket.Conn, sender *wsSender) (*lobby.Player, error) {
+func (h *Handler) handleHandshake(ctx context.Context, conn *websocket.Conn, sender *wsSender, remoteAddr string) (*lobby.Player, error) {
 	typ, msgBytes, err := conn.Read(ctx)
 	if err != nil {
 		_ = sendError(sender, ErrCodeInvalidHandshake, "Handshake timed out or failed to read")
@@ -235,6 +243,7 @@ func (h *Handler) handleHandshake(ctx context.Context, conn *websocket.Conn, sen
 		// Attempt to attach to existing session
 		attached, attachErr := h.registry.AttachConnection(payload.SessionToken)
 		if errors.Is(attachErr, lobby.ErrSessionAlreadyActive) {
+			slog.Warn("handshake rejected: session already active", "displayName", payload.Name, "remoteAddr", remoteAddr)
 			_ = sendError(sender, ErrCodeSessionAlreadyActive, "Session is already active in another connection")
 			_ = conn.Close(websocket.StatusPolicyViolation, "session already active")
 			return nil, lobby.ErrSessionAlreadyActive
@@ -244,12 +253,15 @@ func (h *Handler) handleHandshake(ctx context.Context, conn *websocket.Conn, sen
 			// Unknown token (e.g., server restart) -> issue fresh session
 			newPlayer, createErr := h.registry.CreatePlayer(payload.Name)
 			if createErr != nil {
+				slog.Warn("handshake rejected: invalid display name", "displayName", payload.Name, "remoteAddr", remoteAddr, "error", createErr)
 				_ = sendError(sender, ErrCodeInvalidName, createErr.Error())
 				_ = conn.Close(websocket.StatusPolicyViolation, "invalid display name")
 				return nil, createErr
 			}
 			player = newPlayer
+			slog.Info("player authenticated", "session", "new (reissued)", "playerId", player.ID, "displayName", player.DisplayName, "remoteAddr", remoteAddr)
 		} else if attachErr != nil {
+			slog.Warn("handshake rejected: failed to attach session", "remoteAddr", remoteAddr, "error", attachErr)
 			_ = sendError(sender, ErrCodeBadRequest, attachErr.Error())
 			_ = conn.Close(websocket.StatusPolicyViolation, "failed to attach session")
 			return nil, attachErr
@@ -264,16 +276,19 @@ func (h *Handler) handleHandshake(ctx context.Context, conn *websocket.Conn, sen
 					}
 				}
 			}
+			slog.Info("player authenticated", "session", "resumed", "playerId", player.ID, "displayName", player.DisplayName, "remoteAddr", remoteAddr)
 		}
 	} else {
 		// No session token provided -> create fresh session
 		newPlayer, createErr := h.registry.CreatePlayer(payload.Name)
 		if createErr != nil {
+			slog.Warn("handshake rejected: invalid display name", "displayName", payload.Name, "remoteAddr", remoteAddr, "error", createErr)
 			_ = sendError(sender, ErrCodeInvalidName, createErr.Error())
 			_ = conn.Close(websocket.StatusPolicyViolation, "invalid display name")
 			return nil, createErr
 		}
 		player = newPlayer
+		slog.Info("player authenticated", "session", "new", "playerId", player.ID, "displayName", player.DisplayName, "remoteAddr", remoteAddr)
 	}
 
 	return player, nil

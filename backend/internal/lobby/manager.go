@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -154,13 +155,16 @@ func (m *LobbyManager) CreateRoom(playerID string) (*Room, error) {
 
 	m.mu.Lock()
 	if len(m.rooms) >= m.maxRooms {
+		total := len(m.rooms)
 		m.mu.Unlock()
+		slog.Warn("room creation rejected: room cap reached", "playerId", playerID, "totalRooms", total, "maxRooms", m.maxRooms)
 		return nil, ErrRoomCapReached
 	}
 
 	currentRoomID, err := m.registry.GetPlayerRoom(playerID)
 	if err == nil && currentRoomID != "" {
 		m.mu.Unlock()
+		slog.Warn("room creation rejected: already in room", "playerId", playerID, "currentRoomId", currentRoomID)
 		return nil, ErrAlreadyInRoom
 	}
 
@@ -193,6 +197,8 @@ func (m *LobbyManager) CreateRoom(playerID string) (*Room, error) {
 	subscribers := m.subscriberListLocked()
 	m.mu.Unlock()
 
+	slog.Info("room created", "roomId", room.ID, "hostId", playerID, "hostName", host.DisplayName, "totalRooms", totalRooms, "maxRooms", m.maxRooms)
+
 	// Notify host
 	m.send(playerID, "room.state", stateView)
 
@@ -213,12 +219,14 @@ func (m *LobbyManager) CancelRoom(playerID string) error {
 	currentRoomID, err := m.registry.GetPlayerRoom(playerID)
 	if err != nil || currentRoomID == "" {
 		m.mu.Unlock()
+		slog.Warn("room cancellation rejected: not in waiting room", "playerId", playerID)
 		return ErrNotInWaitingRoom
 	}
 
 	room, ok := m.rooms[currentRoomID]
 	if !ok || room.HostPlayerID != playerID || room.Phase != PhaseWaiting {
 		m.mu.Unlock()
+		slog.Warn("room cancellation rejected: not host of waiting room", "playerId", playerID, "currentRoomId", currentRoomID)
 		return ErrNotInWaitingRoom
 	}
 
@@ -234,6 +242,8 @@ func (m *LobbyManager) CancelRoom(playerID string) error {
 	removedRoomID := room.ID
 	subscribers := m.subscriberListLocked()
 	m.mu.Unlock()
+
+	slog.Info("room cancelled", "roomId", removedRoomID, "hostId", playerID, "totalRooms", totalRooms)
 
 	// Send updated snapshot to the cancelling host
 	m.send(playerID, "lobby.snapshot", m.GetLobbySnapshot())
@@ -260,22 +270,27 @@ func (m *LobbyManager) JoinRoom(playerID string, roomID string) (*Room, error) {
 	room, ok := m.rooms[roomID]
 	if !ok {
 		m.mu.Unlock()
+		slog.Warn("room join rejected: room not found", "playerId", playerID, "roomId", roomID)
 		return nil, ErrRoomNotFound
 	}
 
 	if room.HostPlayerID == playerID {
 		m.mu.Unlock()
+		slog.Warn("room join rejected: cannot join own room", "playerId", playerID, "roomId", roomID)
 		return nil, ErrCannotJoinOwnRoom
 	}
 
 	currentRoomID, err := m.registry.GetPlayerRoom(playerID)
 	if err == nil && currentRoomID != "" {
 		m.mu.Unlock()
+		slog.Warn("room join rejected: already in room", "playerId", playerID, "currentRoomId", currentRoomID)
 		return nil, ErrAlreadyInRoom
 	}
 
 	if room.Phase != PhaseWaiting || room.GuestPlayerID != "" {
+		phase := room.Phase
 		m.mu.Unlock()
+		slog.Warn("room join rejected: room no longer available", "playerId", playerID, "roomId", roomID, "phase", phase)
 		return nil, ErrRoomNotAvailable
 	}
 
@@ -323,6 +338,8 @@ func (m *LobbyManager) JoinRoom(playerID string, roomID string) (*Room, error) {
 	subscribers := m.subscriberListLocked()
 	m.mu.Unlock()
 
+	slog.Info("player joined room", "roomId", room.ID, "hostId", room.HostPlayerID, "hostName", hostName, "guestId", playerID, "guestName", guest.DisplayName, "phase", room.Phase)
+
 	// Notify both participants
 	m.send(room.HostPlayerID, "room.state", hostState)
 	m.send(playerID, "room.state", guestState)
@@ -358,6 +375,7 @@ func (m *LobbyManager) HandleDisconnect(playerID string) {
 	// If player is host of a waiting room, start the 60s disconnect grace timer
 	if room.Phase == PhaseWaiting && room.HostPlayerID == playerID {
 		roomID := room.ID
+		slog.Info("waiting room host disconnected, starting grace timer", "roomId", roomID, "hostId", playerID, "graceDuration", m.disconnectGrace.String())
 		room.DisconnectTimer = m.clock.AfterFunc(m.disconnectGrace, func() {
 			m.expireWaitingRoom(roomID, playerID)
 		})
@@ -387,6 +405,8 @@ func (m *LobbyManager) expireWaitingRoom(roomID string, hostID string) {
 	totalRooms := len(m.rooms)
 	subscribers := m.subscriberListLocked()
 	m.mu.Unlock()
+
+	slog.Info("waiting room expired due to host disconnect timeout", "roomId", roomID, "hostId", hostID, "totalRooms", totalRooms)
 
 	m.broadcast(subscribers, "lobby.update", LobbyUpdatePayload{
 		Action:     "remove",
@@ -457,6 +477,8 @@ func (m *LobbyManager) HandleReconnect(playerID string) (*Room, error) {
 		CreatedAt:    room.CreatedAt,
 	}
 	m.mu.Unlock()
+
+	slog.Info("player reconnected to room", "roomId", room.ID, "playerId", playerID, "role", role, "phase", room.Phase)
 
 	m.send(playerID, "room.state", stateView)
 	return room, nil

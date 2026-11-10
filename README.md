@@ -38,6 +38,9 @@ docker compose up --build
 ```
 Access frontend at `http://localhost:3000` and backend health check at `http://localhost:8080/healthz`.
 
+## Configuration
+The backend runs zero-config with sensible defaults out of the box. Optional environment variables (`PORT`, `LOG_LEVEL`, `LOG_FORMAT`, and upcoming database/security knobs) are documented in [`backend/.env.example`](backend/.env.example).
+
 ### Test
 ```bash
 cd backend && go test -race ./... && cd ../frontend && npm test
