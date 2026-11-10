@@ -6,15 +6,20 @@ import "encoding/json"
 type MessageType string
 
 const (
-	TypeHello         MessageType = "hello"
-	TypeHelloOK       MessageType = "hello.ok"
-	TypeError         MessageType = "error"
-	TypeLobbyCreate   MessageType = "lobby.create"
-	TypeLobbyCancel   MessageType = "lobby.cancel"
-	TypeLobbyJoin     MessageType = "lobby.join"
-	TypeLobbySnapshot MessageType = "lobby.snapshot"
-	TypeLobbyUpdate   MessageType = "lobby.update"
-	TypeRoomState     MessageType = "room.state"
+	TypeHello          MessageType = "hello"
+	TypeHelloOK        MessageType = "hello.ok"
+	TypeError          MessageType = "error"
+	TypeLobbyCreate    MessageType = "lobby.create"
+	TypeLobbyCancel    MessageType = "lobby.cancel"
+	TypeLobbyJoin      MessageType = "lobby.join"
+	TypeLobbySnapshot  MessageType = "lobby.snapshot"
+	TypeLobbyUpdate    MessageType = "lobby.update"
+	TypeRoomState      MessageType = "room.state"
+	TypeRoomReady      MessageType = "room.ready"
+	TypeRoomUnready    MessageType = "room.unready"
+	TypeRoomLeave      MessageType = "room.leave"
+	TypeGameLeave      MessageType = "game.leave"
+	TypeRoomReadyState MessageType = "room.readyState"
 )
 
 // InboundMessage represents a received client JSON envelope.
@@ -66,4 +71,6 @@ const (
 	ErrCodeRoomNotAvailable     = "ROOM_NOT_AVAILABLE"
 	ErrCodeNotInWaitingRoom     = "NOT_IN_WAITING_ROOM"
 	ErrCodeCannotJoinOwnRoom    = "CANNOT_JOIN_OWN_ROOM"
+	ErrCodeNotInReadyUp         = "NOT_IN_READY_UP"
+	ErrCodeNotInRoom            = "NOT_IN_ROOM"
 )

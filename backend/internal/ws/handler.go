@@ -175,6 +175,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if _, err := h.lobby.JoinRoom(player.ID, joinPayload.RoomID); err != nil {
 				h.handleLobbyError(sender, player.ID, inbound.Type, err)
 			}
+		case TypeRoomReady:
+			if err := h.lobby.ReadyRoom(player.ID); err != nil {
+				h.handleLobbyError(sender, player.ID, inbound.Type, err)
+			}
+		case TypeRoomUnready:
+			if err := h.lobby.UnreadyRoom(player.ID); err != nil {
+				h.handleLobbyError(sender, player.ID, inbound.Type, err)
+			}
+		case TypeRoomLeave, TypeGameLeave:
+			if err := h.lobby.LeaveRoom(player.ID); err != nil {
+				h.handleLobbyError(sender, player.ID, inbound.Type, err)
+			}
 		default:
 			slog.Debug("unhandled message type", "playerId", player.ID, "type", inbound.Type)
 		}
@@ -197,6 +209,10 @@ func (h *Handler) handleLobbyError(sender *wsSender, playerID string, action Mes
 		code = ErrCodeNotInWaitingRoom
 	case errors.Is(err, lobby.ErrCannotJoinOwnRoom):
 		code = ErrCodeCannotJoinOwnRoom
+	case errors.Is(err, lobby.ErrNotInReadyUp):
+		code = ErrCodeNotInReadyUp
+	case errors.Is(err, lobby.ErrNotInRoom):
+		code = ErrCodeNotInRoom
 	}
 	slog.Warn("lobby action rejected", "playerId", playerID, "action", string(action), "code", code, "error", err)
 	_ = sendError(sender, code, err.Error())

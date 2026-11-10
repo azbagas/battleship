@@ -572,3 +572,222 @@ func TestWebSocket_RoomCap(t *testing.T) {
 		t.Errorf("expected error code %s, got %s", ErrCodeRoomCapReached, ep.Code)
 	}
 }
+
+func TestWebSocket_ReadyUpFlow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	server, _, _ := setupTestServer(t)
+
+	connHost, _, _ := connectAndHandshake(t, ctx, server.URL, "Host", "")
+	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
+
+	connGuest, _, _ := connectAndHandshake(t, ctx, server.URL, "Guest", "")
+	defer func() { _ = connGuest.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Host creates room
+	createMsg, _ := json.Marshal(OutboundMessage{Type: TypeLobbyCreate, Payload: struct{}{}})
+	_ = connHost.Write(ctx, websocket.MessageText, createMsg)
+
+	typ, pBytes := readEnvelope(t, ctx, connHost)
+	if typ != TypeRoomState {
+		t.Fatalf("expected room.state for host, got %s", typ)
+	}
+	var hostRoomState lobby.RoomStateView
+	_ = json.Unmarshal(pBytes, &hostRoomState)
+	roomID := hostRoomState.RoomID
+
+	// Guest receives lobby.update upsert
+	typG, _ := readEnvelope(t, ctx, connGuest)
+	if typG != TypeLobbyUpdate {
+		t.Fatalf("expected lobby.update for guest, got %s", typG)
+	}
+
+	// Guest joins room
+	joinMsg, _ := json.Marshal(OutboundMessage{Type: TypeLobbyJoin, Payload: LobbyJoinPayload{RoomID: roomID}})
+	_ = connGuest.Write(ctx, websocket.MessageText, joinMsg)
+
+	// Both receive room.state and room.readyState
+	typG1, _ := readEnvelope(t, ctx, connGuest)
+	if typG1 != TypeRoomState {
+		t.Fatalf("guest expected room.state, got %s", typG1)
+	}
+	typG2, pG2 := readEnvelope(t, ctx, connGuest)
+	if typG2 != TypeRoomReadyState {
+		t.Fatalf("guest expected room.readyState, got %s", typG2)
+	}
+	var gReady lobby.RoomReadyStateView
+	_ = json.Unmarshal(pG2, &gReady)
+	if gReady.HostReady || gReady.GuestReady {
+		t.Fatalf("expected both unready initially")
+	}
+
+	typH1, _ := readEnvelope(t, ctx, connHost)
+	if typH1 != TypeRoomState {
+		t.Fatalf("host expected room.state, got %s", typH1)
+	}
+	typH2, _ := readEnvelope(t, ctx, connHost)
+	if typH2 != TypeRoomReadyState {
+		t.Fatalf("host expected room.readyState, got %s", typH2)
+	}
+
+	// Guest readies up
+	readyMsg, _ := json.Marshal(OutboundMessage{Type: TypeRoomReady, Payload: struct{}{}})
+	_ = connGuest.Write(ctx, websocket.MessageText, readyMsg)
+
+	// Both should receive room.readyState with guestReady: true
+	_, pGuestR := readEnvelope(t, ctx, connGuest)
+	_ = json.Unmarshal(pGuestR, &gReady)
+	if !gReady.GuestReady || gReady.HostReady {
+		t.Errorf("guest expected guestReady=true, hostReady=false, got %+v", gReady)
+	}
+
+	_, pHostR := readEnvelope(t, ctx, connHost)
+	var hReady lobby.RoomReadyStateView
+	_ = json.Unmarshal(pHostR, &hReady)
+	if !hReady.GuestReady || hReady.HostReady {
+		t.Errorf("host expected guestReady=true, hostReady=false, got %+v", hReady)
+	}
+
+	// Host readies up -> both ready -> transition to placement
+	_ = connHost.Write(ctx, websocket.MessageText, readyMsg)
+
+	// Host receives readyState then placement room.state
+	tHostR, _ := readEnvelope(t, ctx, connHost)
+	if tHostR != TypeRoomReadyState {
+		t.Fatalf("host expected room.readyState, got %s", tHostR)
+	}
+	tHostState, pHostState := readEnvelope(t, ctx, connHost)
+	if tHostState != TypeRoomState {
+		t.Fatalf("host expected room.state, got %s", tHostState)
+	}
+	var hostPlacement lobby.RoomStateView
+	_ = json.Unmarshal(pHostState, &hostPlacement)
+	if hostPlacement.Phase != lobby.PhasePlacement {
+		t.Errorf("host expected phase placement, got %s", hostPlacement.Phase)
+	}
+
+	// Guest receives readyState then placement room.state
+	tGuestR, _ := readEnvelope(t, ctx, connGuest)
+	if tGuestR != TypeRoomReadyState {
+		t.Fatalf("guest expected room.readyState, got %s", tGuestR)
+	}
+	tGuestState, pGuestState := readEnvelope(t, ctx, connGuest)
+	if tGuestState != TypeRoomState {
+		t.Fatalf("guest expected room.state, got %s", tGuestState)
+	}
+	var guestPlacement lobby.RoomStateView
+	_ = json.Unmarshal(pGuestState, &guestPlacement)
+	if guestPlacement.Phase != lobby.PhasePlacement {
+		t.Errorf("guest expected phase placement, got %s", guestPlacement.Phase)
+	}
+}
+
+func TestWebSocket_ReadyUp_GuestLeave(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	server, _, _ := setupTestServer(t)
+
+	connHost, _, _ := connectAndHandshake(t, ctx, server.URL, "Host", "")
+	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
+
+	connGuest, _, _ := connectAndHandshake(t, ctx, server.URL, "Guest", "")
+	defer func() { _ = connGuest.Close(websocket.StatusNormalClosure, "done") }()
+
+	createMsg, _ := json.Marshal(OutboundMessage{Type: TypeLobbyCreate, Payload: struct{}{}})
+	_ = connHost.Write(ctx, websocket.MessageText, createMsg)
+	_, pBytes := readEnvelope(t, ctx, connHost)
+	var hostRoomState lobby.RoomStateView
+	_ = json.Unmarshal(pBytes, &hostRoomState)
+	roomID := hostRoomState.RoomID
+
+	// Drain guest lobby.update
+	_, _ = readEnvelope(t, ctx, connGuest)
+
+	joinMsg, _ := json.Marshal(OutboundMessage{Type: TypeLobbyJoin, Payload: LobbyJoinPayload{RoomID: roomID}})
+	_ = connGuest.Write(ctx, websocket.MessageText, joinMsg)
+
+	// Drain room.state and room.readyState for both
+	_, _ = readEnvelope(t, ctx, connGuest)
+	_, _ = readEnvelope(t, ctx, connGuest)
+	_, _ = readEnvelope(t, ctx, connHost)
+	_, _ = readEnvelope(t, ctx, connHost)
+
+	// Guest leaves room
+	leaveMsg, _ := json.Marshal(OutboundMessage{Type: TypeRoomLeave, Payload: struct{}{}})
+	_ = connGuest.Write(ctx, websocket.MessageText, leaveMsg)
+
+	// Host receives waiting room.state
+	tHost, pHost := readEnvelope(t, ctx, connHost)
+	if tHost != TypeRoomState {
+		t.Fatalf("host expected room.state, got %s", tHost)
+	}
+	var hState lobby.RoomStateView
+	_ = json.Unmarshal(pHost, &hState)
+	if hState.Phase != lobby.PhaseWaiting {
+		t.Errorf("host expected phase waiting, got %s", hState.Phase)
+	}
+
+	// Guest receives lobby.snapshot (or lobby.update first)
+	tGuest, _ := readEnvelope(t, ctx, connGuest)
+	switch tGuest {
+	case TypeLobbySnapshot:
+		// all good
+	case TypeLobbyUpdate:
+		tGuest, _ = readEnvelope(t, ctx, connGuest)
+		if tGuest != TypeLobbySnapshot {
+			t.Errorf("guest expected lobby.snapshot, got %s", tGuest)
+		}
+	default:
+		t.Errorf("guest expected lobby.snapshot, got %s", tGuest)
+	}
+}
+
+func TestWebSocket_ReadyUp_HostLeave(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	server, _, _ := setupTestServer(t)
+
+	connHost, _, _ := connectAndHandshake(t, ctx, server.URL, "Host", "")
+	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
+
+	connGuest, _, _ := connectAndHandshake(t, ctx, server.URL, "Guest", "")
+	defer func() { _ = connGuest.Close(websocket.StatusNormalClosure, "done") }()
+
+	createMsg, _ := json.Marshal(OutboundMessage{Type: TypeLobbyCreate, Payload: struct{}{}})
+	_ = connHost.Write(ctx, websocket.MessageText, createMsg)
+	_, pBytes := readEnvelope(t, ctx, connHost)
+	var hostRoomState lobby.RoomStateView
+	_ = json.Unmarshal(pBytes, &hostRoomState)
+	roomID := hostRoomState.RoomID
+
+	// Drain guest lobby.update
+	_, _ = readEnvelope(t, ctx, connGuest)
+
+	joinMsg, _ := json.Marshal(OutboundMessage{Type: TypeLobbyJoin, Payload: LobbyJoinPayload{RoomID: roomID}})
+	_ = connGuest.Write(ctx, websocket.MessageText, joinMsg)
+
+	// Drain room.state and room.readyState for both
+	_, _ = readEnvelope(t, ctx, connGuest)
+	_, _ = readEnvelope(t, ctx, connGuest)
+	_, _ = readEnvelope(t, ctx, connHost)
+	_, _ = readEnvelope(t, ctx, connHost)
+
+	// Host leaves room
+	leaveMsg, _ := json.Marshal(OutboundMessage{Type: TypeRoomLeave, Payload: struct{}{}})
+	_ = connHost.Write(ctx, websocket.MessageText, leaveMsg)
+
+	// Host receives lobby.snapshot
+	tHost, _ := readEnvelope(t, ctx, connHost)
+	if tHost != TypeLobbySnapshot {
+		t.Fatalf("host expected lobby.snapshot, got %s", tHost)
+	}
+
+	// Guest receives lobby.snapshot
+	tGuest, _ := readEnvelope(t, ctx, connGuest)
+	if tGuest != TypeLobbySnapshot {
+		t.Fatalf("guest expected lobby.snapshot, got %s", tGuest)
+	}
+}

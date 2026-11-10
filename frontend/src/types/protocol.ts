@@ -9,6 +9,11 @@ export type MessageType =
   | 'lobby.snapshot'
   | 'lobby.update'
   | 'room.state'
+  | 'room.ready'
+  | 'room.unready'
+  | 'room.leave'
+  | 'game.leave'
+  | 'room.readyState'
   | string
 
 export interface InboundMessage<T = unknown> {
@@ -76,7 +81,15 @@ export interface RoomStatePayload {
   opponentName?: string
   host: RoomPlayerView
   guest?: RoomPlayerView
+  hostReady?: boolean
+  guestReady?: boolean
   createdAt: string
+}
+
+export interface RoomReadyStatePayload {
+  roomId: string
+  hostReady: boolean
+  guestReady: boolean
 }
 
 export const ErrorCode = {
@@ -90,6 +103,8 @@ export const ErrorCode = {
   RoomNotAvailable: 'ROOM_NOT_AVAILABLE',
   NotInWaitingRoom: 'NOT_IN_WAITING_ROOM',
   CannotJoinOwnRoom: 'CANNOT_JOIN_OWN_ROOM',
+  NotInReadyUp: 'NOT_IN_READY_UP',
+  NotInRoom: 'NOT_IN_ROOM',
 } as const
 
 export type ErrorCodeType = (typeof ErrorCode)[keyof typeof ErrorCode] | string

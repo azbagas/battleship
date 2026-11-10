@@ -227,5 +227,120 @@ describe('LobbyProvider', () => {
     })
     expect(result.current.lobbyError).toBeNull()
   })
+
+  it('updates readyState on room.readyState message and handles toggleReady', () => {
+    const { result } = renderHook(() => useLobby(), { wrapper })
+    const roomStateHandler = messageHandlers.get('room.state')
+    const readyStateHandler = messageHandlers.get('room.readyState')
+
+    // Transition into ready-up room
+    act(() => {
+      roomStateHandler!({
+        roomId: 'r_ready1',
+        phase: 'ready-up',
+        role: 'host',
+        host: { id: 'p1', name: 'Admiral Nimitz' },
+        createdAt: '2026-11-09T10:00:00Z',
+      })
+    })
+
+    expect(result.current.readyState).toBeNull()
+
+    // Host clicks toggleReady -> should send room.ready
+    act(() => {
+      result.current.toggleReady()
+    })
+    expect(mockClient.send).toHaveBeenCalledWith('room.ready', {})
+
+    // Server broadcasts room.readyState with hostReady: true
+    act(() => {
+      readyStateHandler!({
+        roomId: 'r_ready1',
+        hostReady: true,
+        guestReady: false,
+      })
+    })
+
+    expect(result.current.readyState).toEqual({ hostReady: true, guestReady: false })
+
+    // Host clicks toggleReady again -> should send room.unready
+    act(() => {
+      result.current.toggleReady()
+    })
+    expect(mockClient.send).toHaveBeenCalledWith('room.unready', {})
+  })
+
+  it('sends room.leave when leaveRoom is invoked', () => {
+    const { result } = renderHook(() => useLobby(), { wrapper })
+
+    act(() => {
+      result.current.leaveRoom()
+    })
+
+    expect(mockClient.send).toHaveBeenCalledWith('room.leave', {})
+  })
+
+  it('resets activeRoom and readyState when receiving lobby.snapshot', () => {
+    const { result } = renderHook(() => useLobby(), { wrapper })
+    const roomStateHandler = messageHandlers.get('room.state')
+    const snapshotHandler = messageHandlers.get('lobby.snapshot')
+
+    act(() => {
+      roomStateHandler!({
+        roomId: 'r_ready2',
+        phase: 'ready-up',
+        role: 'guest',
+        host: { id: 'p1', name: 'Admiral Nimitz' },
+        guest: { id: 'p2', name: 'Captain Picard' },
+        createdAt: '2026-11-09T10:00:00Z',
+      })
+    })
+    expect(result.current.activeRoom).not.toBeNull()
+
+    act(() => {
+      snapshotHandler!({
+        rooms: [],
+        totalRooms: 0,
+        maxRooms: 10,
+      })
+    })
+
+    expect(result.current.activeRoom).toBeNull()
+    expect(result.current.readyState).toBeNull()
+  })
+
+  it('resets activeRoom and isCancelling when lobby.snapshot arrives with null rooms', () => {
+    const { result } = renderHook(() => useLobby(), { wrapper })
+    const roomStateHandler = messageHandlers.get('room.state')
+    const snapshotHandler = messageHandlers.get('lobby.snapshot')
+
+    act(() => {
+      roomStateHandler!({
+        roomId: 'r_waiting1',
+        phase: 'waiting',
+        role: 'host',
+        host: { id: 'p1', name: 'Admiral Nimitz' },
+        createdAt: '2026-11-09T10:00:00Z',
+      })
+    })
+
+    act(() => {
+      result.current.cancelRoom()
+    })
+    expect(result.current.isCancelling).toBe(true)
+
+    // Backend sends rooms: null when empty
+    act(() => {
+      snapshotHandler!({
+        rooms: null as unknown as WaitingRoomView[],
+        totalRooms: 0,
+        maxRooms: 10,
+      })
+    })
+
+    expect(result.current.activeRoom).toBeNull()
+    expect(result.current.isCancelling).toBe(false)
+    expect(result.current.rooms).toEqual([])
+  })
 })
 

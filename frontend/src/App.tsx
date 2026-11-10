@@ -6,7 +6,8 @@ import { useLobby } from './context/LobbyContext'
 import { HomeScreen } from './components/HomeScreen'
 import { LobbyScreen } from './components/LobbyScreen'
 import { WaitingRoomScreen } from './components/WaitingRoomScreen'
-import { ReadyUpPlaceholder } from './components/ReadyUpPlaceholder'
+import { ReadyUpScreen } from './components/ReadyUpScreen'
+import { PlacementPlaceholder } from './components/PlacementPlaceholder'
 
 export const AppContent: React.FC = () => {
   const { player, isSessionConflict } = useSession()
@@ -23,7 +24,10 @@ export const AppContent: React.FC = () => {
       return <WaitingRoomScreen />
     }
     if (activeRoom.phase === 'ready-up') {
-      return <ReadyUpPlaceholder />
+      return <ReadyUpScreen />
+    }
+    if (activeRoom.phase === 'placement') {
+      return <PlacementPlaceholder />
     }
   }
 

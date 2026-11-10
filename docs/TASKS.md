@@ -10,7 +10,7 @@ Blocked: nothing
 
 Known issues: none
 
-Next up: T-06 [F-03] Implement backend `ready-up` room phase (`room.ready`, `room.unready`, `room.readyState`) and leave/disconnect handling during ready-up (returning room to lobby if guest leaves, or closing room if host leaves).
+Next up: T-08 [F-04] Implement pure `internal/game` board & fleet placement logic (10×10 grid, 5 standard ships, bounds/overlap validation, adjacent ships allowed, full random fleet generation, and partial auto-placement for unplaced ships).
 
 <!-- Update this block at the end of every session. If it passes ~15 lines, move it to STATUS.md. -->
 
@@ -37,9 +37,9 @@ Next up: T-06 [F-03] Implement backend `ready-up` room phase (`room.ready`, `roo
   Done when: server startup configures slog with env-driven level/format, room and connection lifecycle events emit structured logs without exposing secret tokens, and backend tests pass with `-race`.
 
 ### F-03 Pre-Game Ready-Up
-- [ ] T-06 [F-03] Implement backend `ready-up` room phase (`room.ready`, `room.unready`, `room.readyState`) and leave/disconnect handling during ready-up (returning room to lobby if guest leaves, or closing room if host leaves).
+- [x] T-06 [F-03] Implement backend `ready-up` room phase (`room.ready`, `room.unready`, `room.readyState`) and leave/disconnect handling during ready-up (returning room to lobby if guest leaves, or closing room if host leaves).
   Done when: room state machine tests verify ready/un-ready toggling, transition to placement only when both players are ready, and guest/host departure rules.
-- [ ] T-07 [F-03] Build frontend Ready-Up screen displaying opponent name, both players' ready status, **Ready** / **Un-ready** toggle button, and **Leave** action.
+- [x] T-07 [F-03] Build frontend Ready-Up screen displaying opponent name, both players' ready status, **Ready** / **Un-ready** toggle button, and **Leave** action.
   Done when: two joined players can toggle ready states and only advance to placement once both have clicked **Ready**.
 
 ### F-04 Fleet Placement Phase
@@ -100,6 +100,7 @@ Next up: T-06 [F-03] Implement backend `ready-up` room phase (`room.ready`, `roo
 - 2026-11-10: T-05b implemented with structured `log/slog` logging across WebSocket transport, session authentication, and lobby/room lifecycles. Default log level is `INFO` (configurable via `LOG_LEVEL`) and text/json format (configurable via `LOG_FORMAT`); session tokens are redacted to protect security.
 - 2026-11-10: Hardened `WebSocketClient.connect` to be idempotent for identical connection options and cleanly detach/close obsolete socket instances before opening new ones, preventing ghost socket timeouts and false session collision triggers under React StrictMode.
 - 2026-11-10: T-01b added root package.json orchestrator with `concurrently` to run backend and frontend simultaneously with color-coded logs and graceful SIGINT cleanup via `npm run dev`.
+- 2026-11-10: T-06 & T-07 implemented ready-up room phase with `room.ready`, `room.unready`, `room.readyState`, and `room.leave` / `game.leave`. Enforces departure rules (guest leaves/disconnect timeout returns room to waiting lobby with public lobby upsert; host leaves/disconnect timeout destroys room and returns guest to lobby; 60s disconnect grace period applies before timeout resolution). Mutual readiness automatically transitions the room to the placement phase and renders `PlacementPlaceholder`.
 
 ## Archive
 <!-- Move finished version groups here as one-line summaries, e.g. "v1 shipped: F-01 to F-03." -->

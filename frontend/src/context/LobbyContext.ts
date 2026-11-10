@@ -1,6 +1,11 @@
 import { createContext, useContext } from 'react'
 import { RoomStatePayload, WaitingRoomView } from '../types/protocol'
 
+export interface ReadyState {
+  hostReady: boolean
+  guestReady: boolean
+}
+
 export interface LobbyContextValue {
   rooms: WaitingRoomView[]
   totalRooms: number
@@ -15,6 +20,13 @@ export interface LobbyContextValue {
   joinRoom: (roomId: string) => void
   cancelRoom: () => void
   clearLobbyError: () => void
+
+  // Ready-up controls
+  readyState: ReadyState | null
+  isTogglingReady: boolean
+  isLeavingRoom: boolean
+  toggleReady: () => void
+  leaveRoom: () => void
 }
 
 export const LobbyContext = createContext<LobbyContextValue | undefined>(undefined)

@@ -29,6 +29,11 @@ describe('WaitingRoomScreen', () => {
     joinRoom: vi.fn(),
     cancelRoom: vi.fn(),
     clearLobbyError: vi.fn(),
+    readyState: null,
+    isTogglingReady: false,
+    isLeavingRoom: false,
+    toggleReady: vi.fn(),
+    leaveRoom: vi.fn(),
   }
 
   const defaultMockSession: SessionContextValue = {

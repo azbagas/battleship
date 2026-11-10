@@ -17,14 +17,16 @@ const (
 
 // Room represents an in-memory game room.
 type Room struct {
-	ID              string
-	HostPlayerID    string
-	GuestPlayerID   string
-	Phase           RoomPhase
-	HostReady       bool
-	GuestReady      bool
-	CreatedAt       time.Time
-	DisconnectTimer Timer
+	ID                   string
+	HostPlayerID         string
+	GuestPlayerID        string
+	Phase                RoomPhase
+	HostReady            bool
+	GuestReady           bool
+	CreatedAt            time.Time
+	DisconnectTimer      Timer
+	HostDisconnectTimer  Timer
+	GuestDisconnectTimer Timer
 }
 
 // WaitingRoomView describes an open waiting room visible to lobby browsers.
@@ -40,6 +42,13 @@ type RoomPlayerView struct {
 	Name string `json:"name"`
 }
 
+// RoomReadyStateView carries real-time ready-up status for both players.
+type RoomReadyStateView struct {
+	RoomID     string `json:"roomId"`
+	HostReady  bool   `json:"hostReady"`
+	GuestReady bool   `json:"guestReady"`
+}
+
 // RoomStateView is sent to players upon entering or updating a room.
 type RoomStateView struct {
 	RoomID       string          `json:"roomId"`
@@ -48,6 +57,8 @@ type RoomStateView struct {
 	OpponentName string          `json:"opponentName,omitempty"`
 	Host         RoomPlayerView  `json:"host"`
 	Guest        *RoomPlayerView `json:"guest,omitempty"`
+	HostReady    bool            `json:"hostReady"`
+	GuestReady   bool            `json:"guestReady"`
 	CreatedAt    time.Time       `json:"createdAt"`
 }
 

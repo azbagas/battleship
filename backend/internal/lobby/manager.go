@@ -18,6 +18,8 @@ var (
 	ErrRoomNotAvailable  = errors.New("game is no longer available")
 	ErrNotInWaitingRoom  = errors.New("player is not hosting a waiting room")
 	ErrCannotJoinOwnRoom = errors.New("cannot join your own room")
+	ErrNotInReadyUp      = errors.New("room is not in ready-up phase")
+	ErrNotInRoom         = errors.New("player is not in an active room")
 )
 
 // ClientSender specifies the interface for transmitting messages to a connected player.
@@ -118,7 +120,7 @@ func (m *LobbyManager) GetLobbySnapshot() LobbySnapshotPayload {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	var waitingRooms []WaitingRoomView
+	waitingRooms := make([]WaitingRoomView, 0)
 	for _, room := range m.rooms {
 		if room.Phase == PhaseWaiting {
 			host, ok := m.registry.GetByID(room.HostPlayerID)
@@ -297,9 +299,19 @@ func (m *LobbyManager) JoinRoom(playerID string, roomID string) (*Room, error) {
 	// Atomic join transition
 	room.GuestPlayerID = playerID
 	room.Phase = PhaseReadyUp
+	room.HostReady = false
+	room.GuestReady = false
 	if room.DisconnectTimer != nil {
 		room.DisconnectTimer.Stop()
 		room.DisconnectTimer = nil
+	}
+	if room.HostDisconnectTimer != nil {
+		room.HostDisconnectTimer.Stop()
+		room.HostDisconnectTimer = nil
+	}
+	if room.GuestDisconnectTimer != nil {
+		room.GuestDisconnectTimer.Stop()
+		room.GuestDisconnectTimer = nil
 	}
 
 	_ = m.registry.SetCurrentRoom(playerID, roomID)
@@ -321,6 +333,8 @@ func (m *LobbyManager) JoinRoom(playerID string, roomID string) (*Room, error) {
 		OpponentName: guest.DisplayName,
 		Host:         hostView,
 		Guest:        &guestView,
+		HostReady:    false,
+		GuestReady:   false,
 		CreatedAt:    room.CreatedAt,
 	}
 
@@ -331,7 +345,15 @@ func (m *LobbyManager) JoinRoom(playerID string, roomID string) (*Room, error) {
 		OpponentName: hostName,
 		Host:         hostView,
 		Guest:        &guestView,
+		HostReady:    false,
+		GuestReady:   false,
 		CreatedAt:    room.CreatedAt,
+	}
+
+	readyState := RoomReadyStateView{
+		RoomID:     room.ID,
+		HostReady:  false,
+		GuestReady: false,
 	}
 
 	totalRooms := len(m.rooms)
@@ -342,7 +364,9 @@ func (m *LobbyManager) JoinRoom(playerID string, roomID string) (*Room, error) {
 
 	// Notify both participants
 	m.send(room.HostPlayerID, "room.state", hostState)
+	m.send(room.HostPlayerID, "room.readyState", readyState)
 	m.send(playerID, "room.state", guestState)
+	m.send(playerID, "room.readyState", readyState)
 
 	// Broadcast removal from public waiting list to lobby browsers
 	m.broadcast(subscribers, "lobby.update", LobbyUpdatePayload{
@@ -353,6 +377,321 @@ func (m *LobbyManager) JoinRoom(playerID string, roomID string) (*Room, error) {
 	})
 
 	return room, nil
+}
+
+// ReadyRoom marks a player as ready in their active ready-up room.
+// When both players are ready, the room automatically transitions to placement.
+func (m *LobbyManager) ReadyRoom(playerID string) error {
+	m.mu.Lock()
+	currentRoomID, err := m.registry.GetPlayerRoom(playerID)
+	if err != nil || currentRoomID == "" {
+		m.mu.Unlock()
+		slog.Warn("ready action rejected: not in room", "playerId", playerID)
+		return ErrNotInRoom
+	}
+
+	room, ok := m.rooms[currentRoomID]
+	if !ok {
+		m.mu.Unlock()
+		slog.Warn("ready action rejected: room not found", "playerId", playerID, "roomId", currentRoomID)
+		return ErrRoomNotFound
+	}
+
+	if room.Phase != PhaseReadyUp {
+		phase := room.Phase
+		m.mu.Unlock()
+		slog.Warn("ready action rejected: not in ready-up phase", "playerId", playerID, "roomId", currentRoomID, "phase", phase)
+		return ErrNotInReadyUp
+	}
+
+	switch playerID {
+	case room.HostPlayerID:
+		room.HostReady = true
+	case room.GuestPlayerID:
+		room.GuestReady = true
+	default:
+		m.mu.Unlock()
+		return ErrNotInRoom
+	}
+
+	readyState := RoomReadyStateView{
+		RoomID:     room.ID,
+		HostReady:  room.HostReady,
+		GuestReady: room.GuestReady,
+	}
+
+	hostID := room.HostPlayerID
+	guestID := room.GuestPlayerID
+
+	slog.Info("player set ready", "roomId", room.ID, "playerId", playerID, "hostReady", room.HostReady, "guestReady", room.GuestReady)
+
+	// Check if both players are now ready -> transition to placement
+	transitionToPlacement := room.HostReady && room.GuestReady
+	var hostPlacementState, guestPlacementState RoomStateView
+	if transitionToPlacement {
+		room.Phase = PhasePlacement
+		host, _ := m.registry.GetByID(hostID)
+		guest, _ := m.registry.GetByID(guestID)
+		hostName := "Host"
+		if host != nil {
+			hostName = host.DisplayName
+		}
+		guestName := "Guest"
+		if guest != nil {
+			guestName = guest.DisplayName
+		}
+
+		hostView := RoomPlayerView{ID: hostID, Name: hostName}
+		guestView := RoomPlayerView{ID: guestID, Name: guestName}
+
+		hostPlacementState = RoomStateView{
+			RoomID:       room.ID,
+			Phase:        PhasePlacement,
+			Role:         "host",
+			OpponentName: guestName,
+			Host:         hostView,
+			Guest:        &guestView,
+			HostReady:    true,
+			GuestReady:   true,
+			CreatedAt:    room.CreatedAt,
+		}
+		guestPlacementState = RoomStateView{
+			RoomID:       room.ID,
+			Phase:        PhasePlacement,
+			Role:         "guest",
+			OpponentName: hostName,
+			Host:         hostView,
+			Guest:        &guestView,
+			HostReady:    true,
+			GuestReady:   true,
+			CreatedAt:    room.CreatedAt,
+		}
+		slog.Info("both players ready, room transitioned to placement", "roomId", room.ID, "hostId", hostID, "guestId", guestID)
+	}
+
+	m.mu.Unlock()
+
+	// Broadcast readyState
+	m.send(hostID, "room.readyState", readyState)
+	if guestID != "" {
+		m.send(guestID, "room.readyState", readyState)
+	}
+
+	// If transitioned to placement, broadcast placement room.state
+	if transitionToPlacement {
+		m.send(hostID, "room.state", hostPlacementState)
+		if guestID != "" {
+			m.send(guestID, "room.state", guestPlacementState)
+		}
+	}
+
+	return nil
+}
+
+// UnreadyRoom clears a player's ready state in their active ready-up room.
+func (m *LobbyManager) UnreadyRoom(playerID string) error {
+	m.mu.Lock()
+	currentRoomID, err := m.registry.GetPlayerRoom(playerID)
+	if err != nil || currentRoomID == "" {
+		m.mu.Unlock()
+		slog.Warn("unready action rejected: not in room", "playerId", playerID)
+		return ErrNotInRoom
+	}
+
+	room, ok := m.rooms[currentRoomID]
+	if !ok {
+		m.mu.Unlock()
+		slog.Warn("unready action rejected: room not found", "playerId", playerID, "roomId", currentRoomID)
+		return ErrRoomNotFound
+	}
+
+	if room.Phase != PhaseReadyUp {
+		phase := room.Phase
+		m.mu.Unlock()
+		slog.Warn("unready action rejected: not in ready-up phase", "playerId", playerID, "roomId", currentRoomID, "phase", phase)
+		return ErrNotInReadyUp
+	}
+
+	switch playerID {
+	case room.HostPlayerID:
+		room.HostReady = false
+	case room.GuestPlayerID:
+		room.GuestReady = false
+	default:
+		m.mu.Unlock()
+		return ErrNotInRoom
+	}
+
+	readyState := RoomReadyStateView{
+		RoomID:     room.ID,
+		HostReady:  room.HostReady,
+		GuestReady: room.GuestReady,
+	}
+
+	hostID := room.HostPlayerID
+	guestID := room.GuestPlayerID
+
+	slog.Info("player set unready", "roomId", room.ID, "playerId", playerID, "hostReady", room.HostReady, "guestReady", room.GuestReady)
+	m.mu.Unlock()
+
+	m.send(hostID, "room.readyState", readyState)
+	if guestID != "" {
+		m.send(guestID, "room.readyState", readyState)
+	}
+
+	return nil
+}
+
+// LeaveRoom handles explicit departures from waiting or ready-up rooms.
+// If in waiting and host: cancels the waiting room.
+// If in ready-up and guest: returns the room to waiting lobby for the host.
+// If in ready-up and host: closes the room and returns the guest to lobby.
+func (m *LobbyManager) LeaveRoom(playerID string) error {
+	m.mu.Lock()
+	currentRoomID, err := m.registry.GetPlayerRoom(playerID)
+	if err != nil || currentRoomID == "" {
+		m.mu.Unlock()
+		slog.Warn("leave action rejected: not in room", "playerId", playerID)
+		return ErrNotInRoom
+	}
+
+	room, ok := m.rooms[currentRoomID]
+	if !ok {
+		_ = m.registry.ClearCurrentRoom(playerID)
+		m.mu.Unlock()
+		slog.Warn("leave action rejected: room not found", "playerId", playerID, "roomId", currentRoomID)
+		return ErrRoomNotFound
+	}
+
+	if room.Phase == PhaseWaiting {
+		m.mu.Unlock()
+		return m.CancelRoom(playerID)
+	}
+
+	if room.Phase == PhaseReadyUp {
+		return m.leaveReadyUpLocked(room, playerID)
+	}
+
+	m.mu.Unlock()
+	return ErrNotInReadyUp
+}
+
+// leaveReadyUpLocked executes departure rules for a ready-up room with m.mu held.
+func (m *LobbyManager) leaveReadyUpLocked(room *Room, playerID string) error {
+	isHost := (playerID == room.HostPlayerID)
+	isGuest := (playerID == room.GuestPlayerID)
+
+	if !isHost && !isGuest {
+		m.mu.Unlock()
+		return ErrNotInRoom
+	}
+
+	if isGuest {
+		if room.GuestDisconnectTimer != nil {
+			room.GuestDisconnectTimer.Stop()
+			room.GuestDisconnectTimer = nil
+		}
+		guestID := room.GuestPlayerID
+		hostID := room.HostPlayerID
+
+		// Reset room back to PhaseWaiting
+		room.GuestPlayerID = ""
+		room.GuestReady = false
+		room.HostReady = false
+		room.Phase = PhaseWaiting
+
+		// Clear guest's room and subscribe back to lobby
+		_ = m.registry.ClearCurrentRoom(guestID)
+		m.lobbySubscribers[guestID] = struct{}{}
+
+		// If host had disconnected while guest was in room, ensure host disconnect timer is running
+		host, _ := m.registry.GetByID(hostID)
+		if host != nil && host.ConnectionState == StateDisconnected {
+			if room.HostDisconnectTimer == nil && room.DisconnectTimer == nil {
+				roomID := room.ID
+				room.DisconnectTimer = m.clock.AfterFunc(m.disconnectGrace, func() {
+					m.expireWaitingRoom(roomID, hostID)
+				})
+			}
+		}
+
+		hostName := "Host"
+		if host != nil {
+			hostName = host.DisplayName
+		}
+
+		waitingView := WaitingRoomView{
+			ID:        room.ID,
+			HostName:  hostName,
+			CreatedAt: room.CreatedAt,
+		}
+
+		hostState := RoomStateView{
+			RoomID:    room.ID,
+			Phase:     PhaseWaiting,
+			Role:      "host",
+			Host:      RoomPlayerView{ID: hostID, Name: hostName},
+			CreatedAt: room.CreatedAt,
+		}
+
+		totalRooms := len(m.rooms)
+		subscribers := m.subscriberListLocked()
+		m.mu.Unlock()
+
+		slog.Info("guest left ready-up, room returned to waiting lobby", "roomId", room.ID, "hostId", hostID, "guestId", guestID, "totalRooms", totalRooms)
+
+		// Send host updated waiting room state
+		m.send(hostID, "room.state", hostState)
+
+		// Send guest fresh lobby snapshot
+		m.send(guestID, "lobby.snapshot", m.GetLobbySnapshot())
+
+		// Re-broadcast waiting room to all lobby subscribers
+		m.broadcast(subscribers, "lobby.update", LobbyUpdatePayload{
+			Action:     "upsert",
+			Room:       &waitingView,
+			TotalRooms: totalRooms,
+			MaxRooms:   m.maxRooms,
+		})
+
+		return nil
+	}
+
+	// Host left: close the room
+	if room.HostDisconnectTimer != nil {
+		room.HostDisconnectTimer.Stop()
+		room.HostDisconnectTimer = nil
+	}
+	if room.GuestDisconnectTimer != nil {
+		room.GuestDisconnectTimer.Stop()
+		room.GuestDisconnectTimer = nil
+	}
+
+	hostID := room.HostPlayerID
+	guestID := room.GuestPlayerID
+	roomID := room.ID
+
+	delete(m.rooms, roomID)
+	_ = m.registry.ClearCurrentRoom(hostID)
+	_ = m.registry.ClearCurrentRoom(guestID)
+
+	m.lobbySubscribers[hostID] = struct{}{}
+	if guestID != "" {
+		m.lobbySubscribers[guestID] = struct{}{}
+	}
+
+	totalRooms := len(m.rooms)
+	m.mu.Unlock()
+
+	slog.Info("host left ready-up, room closed", "roomId", roomID, "hostId", hostID, "guestId", guestID, "totalRooms", totalRooms)
+
+	// Send lobby snapshots to both players
+	m.send(hostID, "lobby.snapshot", m.GetLobbySnapshot())
+	if guestID != "" {
+		m.send(guestID, "lobby.snapshot", m.GetLobbySnapshot())
+	}
+
+	return nil
 }
 
 // HandleDisconnect manages lobby subscriber cleanup and waiting room host grace timers.
@@ -380,6 +719,60 @@ func (m *LobbyManager) HandleDisconnect(playerID string) {
 			m.expireWaitingRoom(roomID, playerID)
 		})
 	}
+
+	// If room is in PhaseReadyUp, start the 60s disconnect grace timer for whichever player disconnected
+	if room.Phase == PhaseReadyUp {
+		roomID := room.ID
+		if room.HostPlayerID == playerID {
+			if room.HostDisconnectTimer != nil {
+				room.HostDisconnectTimer.Stop()
+			}
+			slog.Info("ready-up host disconnected, starting grace timer", "roomId", roomID, "hostId", playerID, "graceDuration", m.disconnectGrace.String())
+			room.HostDisconnectTimer = m.clock.AfterFunc(m.disconnectGrace, func() {
+				m.expireReadyUpPlayer(roomID, playerID, true)
+			})
+		} else if room.GuestPlayerID == playerID {
+			if room.GuestDisconnectTimer != nil {
+				room.GuestDisconnectTimer.Stop()
+			}
+			slog.Info("ready-up guest disconnected, starting grace timer", "roomId", roomID, "guestId", playerID, "graceDuration", m.disconnectGrace.String())
+			room.GuestDisconnectTimer = m.clock.AfterFunc(m.disconnectGrace, func() {
+				m.expireReadyUpPlayer(roomID, playerID, false)
+			})
+		}
+	}
+
+	m.mu.Unlock()
+}
+
+// expireReadyUpPlayer handles disconnect timeout during ready-up.
+func (m *LobbyManager) expireReadyUpPlayer(roomID string, playerID string, isHost bool) {
+	m.mu.Lock()
+	room, ok := m.rooms[roomID]
+	if !ok || room.Phase != PhaseReadyUp {
+		m.mu.Unlock()
+		return
+	}
+
+	// Verify player is still disconnected before taking action
+	p, ok := m.registry.GetByID(playerID)
+	if ok && p.ConnectionState == StateConnected {
+		m.mu.Unlock()
+		return
+	}
+
+	if isHost && room.HostPlayerID == playerID {
+		slog.Info("ready-up host disconnect grace expired, closing room", "roomId", roomID, "hostId", playerID)
+		_ = m.leaveReadyUpLocked(room, playerID)
+		return
+	}
+
+	if !isHost && room.GuestPlayerID == playerID {
+		slog.Info("ready-up guest disconnect grace expired, returning room to waiting lobby", "roomId", roomID, "guestId", playerID)
+		_ = m.leaveReadyUpLocked(room, playerID)
+		return
+	}
+
 	m.mu.Unlock()
 }
 
@@ -439,6 +832,16 @@ func (m *LobbyManager) HandleReconnect(playerID string) (*Room, error) {
 		}
 	}
 
+	if room.Phase == PhaseReadyUp {
+		if room.HostPlayerID == playerID && room.HostDisconnectTimer != nil {
+			room.HostDisconnectTimer.Stop()
+			room.HostDisconnectTimer = nil
+		} else if room.GuestPlayerID == playerID && room.GuestDisconnectTimer != nil {
+			room.GuestDisconnectTimer.Stop()
+			room.GuestDisconnectTimer = nil
+		}
+	}
+
 	host, _ := m.registry.GetByID(room.HostPlayerID)
 	hostName := "Host"
 	if host != nil {
@@ -474,13 +877,27 @@ func (m *LobbyManager) HandleReconnect(playerID string) (*Room, error) {
 		OpponentName: opponentName,
 		Host:         RoomPlayerView{ID: room.HostPlayerID, Name: hostName},
 		Guest:        guestView,
+		HostReady:    room.HostReady,
+		GuestReady:   room.GuestReady,
 		CreatedAt:    room.CreatedAt,
+	}
+
+	var readyState *RoomReadyStateView
+	if room.Phase == PhaseReadyUp {
+		readyState = &RoomReadyStateView{
+			RoomID:     room.ID,
+			HostReady:  room.HostReady,
+			GuestReady: room.GuestReady,
+		}
 	}
 	m.mu.Unlock()
 
 	slog.Info("player reconnected to room", "roomId", room.ID, "playerId", playerID, "role", role, "phase", room.Phase)
 
 	m.send(playerID, "room.state", stateView)
+	if readyState != nil {
+		m.send(playerID, "room.readyState", *readyState)
+	}
 	return room, nil
 }
 

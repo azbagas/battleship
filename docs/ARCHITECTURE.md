@@ -84,8 +84,8 @@ All messages are JSON envelopes of the form `{ "type": string, "payload": object
 - **Client → Server:**
   - `hello` (`name`, optional `sessionToken`)
   - `lobby.create`, `lobby.cancel`, `lobby.join` (`roomId`)
-  - `room.ready`, `room.unready`
   - `placement.submit` (`ships`), `placement.ready`
+  - `room.ready`, `room.unready`, `room.leave`
   - `battle.fire` (`cell`)
   - `game.leave`
   - `rematch.accept`, `rematch.decline`

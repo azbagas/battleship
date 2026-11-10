@@ -5,12 +5,13 @@ import {
   HelloOKPayload,
   LobbySnapshotPayload,
   LobbyUpdatePayload,
+  RoomReadyStatePayload,
   RoomStatePayload,
   WaitingRoomView,
 } from '../types/protocol'
 import { wsClient, WebSocketClient } from '../services/wsClient'
 import { useSession } from './SessionContext'
-import { LobbyContext } from './LobbyContext'
+import { LobbyContext, ReadyState } from './LobbyContext'
 
 export interface LobbyProviderProps {
   children: React.ReactNode
@@ -39,6 +40,11 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
   const [isCancelling, setIsCancelling] = useState<boolean>(false)
   const [lobbyError, setLobbyError] = useState<string | null>(null)
 
+  // Ready-up states
+  const [readyState, setReadyState] = useState<ReadyState | null>(null)
+  const [isTogglingReady, setIsTogglingReady] = useState<boolean>(false)
+  const [isLeavingRoom, setIsLeavingRoom] = useState<boolean>(false)
+
   // Reset lobby state if session logs out or resets
   useEffect(() => {
     if (!session.player) {
@@ -49,6 +55,9 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       setJoiningRoomId(null)
       setIsCancelling(false)
       setLobbyError(null)
+      setReadyState(null)
+      setIsTogglingReady(false)
+      setIsLeavingRoom(false)
     }
   }, [session.player])
 
@@ -59,21 +68,28 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
         const state = payload.restoredState as Partial<RoomStatePayload>
         if (state.roomId && state.phase) {
           setActiveRoom(payload.restoredState as RoomStatePayload)
+          if (typeof state.hostReady === 'boolean' && typeof state.guestReady === 'boolean') {
+            setReadyState({ hostReady: state.hostReady, guestReady: state.guestReady })
+          }
         }
       }
     })
 
     const unsubSnapshot = client.onMessage<LobbySnapshotPayload>('lobby.snapshot', (payload) => {
-      if (!payload || !Array.isArray(payload.rooms)) return
-      setRooms(sortRoomsOldestFirst(payload.rooms))
-      setTotalRooms(payload.totalRooms ?? payload.rooms.length)
+      if (!payload) return
+      const rawRooms = Array.isArray(payload.rooms) ? payload.rooms : []
+      setRooms(sortRoomsOldestFirst(rawRooms))
+      setTotalRooms(payload.totalRooms ?? rawRooms.length)
       if (typeof payload.maxRooms === 'number') {
         setMaxRooms(payload.maxRooms)
       }
 
-      // If host was waiting and snapshot arrives (e.g. after cancel), reset activeRoom
-      setActiveRoom((prev) => (prev?.phase === 'waiting' ? null : prev))
+      // If in lobby snapshot, player is browsing the public lobby
+      setActiveRoom(null)
+      setReadyState(null)
       setIsCancelling(false)
+      setIsLeavingRoom(false)
+      setIsTogglingReady(false)
     })
 
     const unsubUpdate = client.onMessage<LobbyUpdatePayload>('lobby.update', (payload) => {
@@ -103,15 +119,27 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
     const unsubRoomState = client.onMessage<RoomStatePayload>('room.state', (payload) => {
       if (!payload || !payload.roomId) return
       setActiveRoom(payload)
+      if (typeof payload.hostReady === 'boolean' && typeof payload.guestReady === 'boolean') {
+        setReadyState({ hostReady: payload.hostReady, guestReady: payload.guestReady })
+      }
       setIsCreating(false)
       setJoiningRoomId(null)
+      setIsLeavingRoom(false)
       setLobbyError(null)
+    })
+
+    const unsubReadyState = client.onMessage<RoomReadyStatePayload>('room.readyState', (payload) => {
+      if (!payload || !payload.roomId) return
+      setReadyState({ hostReady: payload.hostReady, guestReady: payload.guestReady })
+      setIsTogglingReady(false)
     })
 
     const unsubError = client.onError((err: ErrorPayload) => {
       setIsCreating(false)
       setJoiningRoomId(null)
       setIsCancelling(false)
+      setIsTogglingReady(false)
+      setIsLeavingRoom(false)
 
       switch (err.code) {
         case ErrorCode.RoomNotAvailable:
@@ -132,6 +160,9 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
         case ErrorCode.NotInWaitingRoom:
           setLobbyError('You are not currently hosting a waiting room.')
           break
+        case ErrorCode.NotInReadyUp:
+          setLobbyError('Room is not currently in ready-up phase.')
+          break
         default:
           // Other errors might be session-level, keep lobbyError null unless relevant
           break
@@ -143,6 +174,7 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       unsubSnapshot()
       unsubUpdate()
       unsubRoomState()
+      unsubReadyState()
       unsubError()
     }
   }, [client])
@@ -153,7 +185,10 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
     if (isCreating || isRoomCapReached || activeRoom) return
     setIsCreating(true)
     setLobbyError(null)
-    client.send('lobby.create', {})
+    const sent = client.send('lobby.create', {})
+    if (!sent) {
+      setIsCreating(false)
+    }
   }, [client, isCreating, isRoomCapReached, activeRoom])
 
   const joinRoom = useCallback(
@@ -161,7 +196,10 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       if (joiningRoomId || activeRoom || !roomId) return
       setJoiningRoomId(roomId)
       setLobbyError(null)
-      client.send('lobby.join', { roomId })
+      const sent = client.send('lobby.join', { roomId })
+      if (!sent) {
+        setJoiningRoomId(null)
+      }
     },
     [client, joiningRoomId, activeRoom],
   )
@@ -169,8 +207,37 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
   const cancelRoom = useCallback(() => {
     if (isCancelling) return
     setIsCancelling(true)
-    client.send('lobby.cancel', {})
+    const sent = client.send('lobby.cancel', {})
+    if (!sent) {
+      setIsCancelling(false)
+    }
   }, [client, isCancelling])
+
+  const toggleReady = useCallback(() => {
+    if (!activeRoom || activeRoom.phase !== 'ready-up' || isTogglingReady) return
+
+    const isSelfReady =
+      activeRoom.role === 'host'
+        ? !!readyState?.hostReady
+        : !!readyState?.guestReady
+
+    setIsTogglingReady(true)
+    const sent = isSelfReady
+      ? client.send('room.unready', {})
+      : client.send('room.ready', {})
+    if (!sent) {
+      setIsTogglingReady(false)
+    }
+  }, [client, activeRoom, readyState, isTogglingReady])
+
+  const leaveRoom = useCallback(() => {
+    if (isLeavingRoom) return
+    setIsLeavingRoom(true)
+    const sent = client.send('room.leave', {})
+    if (!sent) {
+      setIsLeavingRoom(false)
+    }
+  }, [client, isLeavingRoom])
 
   const clearLobbyError = useCallback(() => {
     setLobbyError(null)
@@ -191,6 +258,11 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       joinRoom,
       cancelRoom,
       clearLobbyError,
+      readyState,
+      isTogglingReady,
+      isLeavingRoom,
+      toggleReady,
+      leaveRoom,
     }),
     [
       rooms,
@@ -206,6 +278,11 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       joinRoom,
       cancelRoom,
       clearLobbyError,
+      readyState,
+      isTogglingReady,
+      isLeavingRoom,
+      toggleReady,
+      leaveRoom,
     ],
   )
 

@@ -331,12 +331,40 @@ describe('App & Session Lifecycle', () => {
     }
     ws.receive('room.state', joinedState)
 
-    // Matched screen is displayed
+    // ReadyUpScreen is displayed
     await waitFor(() => {
-      expect(screen.getByText('Combat Sector Matched')).toBeInTheDocument()
-      expect(screen.getByText('OPPONENT CONNECTED')).toBeInTheDocument()
+      expect(screen.getByText('Pre-Game Readiness Check')).toBeInTheDocument()
+      expect(screen.getByText('Sector Engagement Locked')).toBeInTheDocument()
       expect(screen.getByText('Admiral Riker')).toBeInTheDocument()
       expect(screen.getByText('Captain Picard')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Ready for Battle/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Leave Room/i })).toBeInTheDocument()
+    })
+
+    // Guest clicks Ready
+    fireEvent.click(screen.getByRole('button', { name: /Ready for Battle/i }))
+    await waitFor(() => {
+      const lastMsg = JSON.parse(ws.sentMessages[ws.sentMessages.length - 1])
+      expect(lastMsg.type).toBe('room.ready')
+    })
+
+    // Both players ready -> placement phase transition
+    ws.receive('room.readyState', {
+      roomId: 'r_host999',
+      hostReady: true,
+      guestReady: true,
+    })
+    ws.receive('room.state', {
+      ...joinedState,
+      phase: 'placement',
+      hostReady: true,
+      guestReady: true,
+    })
+
+    // Placement screen is displayed
+    await waitFor(() => {
+      expect(screen.getByText('Phase: Fleet Placement')).toBeInTheDocument()
+      expect(screen.getByText('Fleet Dock Initializing')).toBeInTheDocument()
     })
   })
 })
