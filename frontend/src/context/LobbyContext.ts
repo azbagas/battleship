@@ -61,6 +61,12 @@ export interface LobbyContextValue {
   serverRestartNotice: string | null
   clearServerRestartNotice: () => void
   forfeitGame: () => void
+
+  // Rematch controls & state
+  rematchStatus: 'idle' | 'offered_by_me' | 'offered_by_opponent' | 'cancelled'
+  rematchCancelReason: string | null
+  acceptRematch: () => void
+  declineRematch: () => void
 }
 
 export const LobbyContext = createContext<LobbyContextValue | undefined>(undefined)

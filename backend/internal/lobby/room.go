@@ -45,6 +45,12 @@ type Room struct {
 	ShotLog                 []ShotRecord
 	WinnerPlayerID          string
 	EndReason               string
+	GameID                  string
+	StartedAt               time.Time
+	EndedAt                 time.Time
+	Recorded                bool
+	HostRematch             bool
+	GuestRematch            bool
 }
 
 // ShotRecord logs an individual shot fired during battle.

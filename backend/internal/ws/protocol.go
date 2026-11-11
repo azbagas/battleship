@@ -36,6 +36,10 @@ const (
 	TypeGameOver               MessageType = "game.over"
 	TypeOpponentDisconnected   MessageType = "opponent.disconnected"
 	TypeOpponentReconnected    MessageType = "opponent.reconnected"
+	TypeRematchAccept          MessageType = "rematch.accept"
+	TypeRematchDecline         MessageType = "rematch.decline"
+	TypeRematchOffered         MessageType = "rematch.offered"
+	TypeRematchCancelled       MessageType = "rematch.cancelled"
 )
 
 // InboundMessage represents a received client JSON envelope.
@@ -132,6 +136,16 @@ type OpponentDisconnectedPayload struct {
 // OpponentReconnectedPayload notifies a player that their opponent reconnected.
 type OpponentReconnectedPayload struct{}
 
+// RematchOfferedPayload broadcasts a rematch offer to players.
+type RematchOfferedPayload struct {
+	By string `json:"by"`
+}
+
+// RematchCancelledPayload announces cancellation of a rematch offer.
+type RematchCancelledPayload struct {
+	Reason string `json:"reason"`
+}
+
 // Standard protocol error codes.
 const (
 	ErrCodeInvalidHandshake     = "INVALID_HANDSHAKE"
@@ -154,4 +168,7 @@ const (
 	ErrCodeCellAlreadyTargeted  = "CELL_ALREADY_TARGETED"
 	ErrCodeCellOutOfBounds      = "INVALID_COORDINATE"
 	ErrCodeGameOver             = "GAME_OVER"
+	ErrCodeNotInFinished        = "NOT_IN_FINISHED"
+	ErrCodeRematchNotAllowed    = "REMATCH_NOT_ALLOWED"
+	ErrCodeOpponentNotPresent   = "OPPONENT_NOT_PRESENT"
 )

@@ -1,8 +1,10 @@
 package lobby
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/azbagas/battleship/backend/internal/game"
+	"github.com/azbagas/battleship/backend/internal/store"
 )
 
 // Sentinel errors for lobby operations.
@@ -30,6 +33,9 @@ var (
 	ErrNotInBattle        = errors.New("room is not in battle phase")
 	ErrNotYourTurn        = errors.New("not your turn to fire")
 	ErrGameOver           = errors.New("game has already finished")
+	ErrNotInFinished      = errors.New("room is not in finished phase")
+	ErrRematchNotAllowed  = errors.New("rematch is only available after a normal game end")
+	ErrOpponentNotPresent = errors.New("opponent is not in the room or disconnected")
 )
 
 // ClientSender specifies the interface for transmitting messages to a connected player.
@@ -68,6 +74,13 @@ func WithRNG(rng *mrand.Rand) Option {
 	}
 }
 
+// WithStore configures the SQLite persistence store for recording completed matches.
+func WithStore(s store.Store) Option {
+	return func(m *LobbyManager) {
+		m.store = s
+	}
+}
+
 // LobbyManager coordinates public lobby state, room lifecycles, and broadcasts.
 type LobbyManager struct {
 	mu               sync.RWMutex
@@ -79,6 +92,7 @@ type LobbyManager struct {
 	maxRooms         int
 	disconnectGrace  time.Duration
 	rng              *mrand.Rand
+	store            store.Store
 }
 
 // NewLobbyManager constructs a thread-safe LobbyManager.
@@ -103,6 +117,13 @@ func generateRoomID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return "r_" + hex.EncodeToString(b)
+}
+
+// generateGameID creates a unique match ID prefixed with "g_".
+func generateGameID() string {
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	return "g_" + hex.EncodeToString(b)
 }
 
 // RegisterConnection attaches a player's active message sender.
@@ -133,6 +154,19 @@ func (m *LobbyManager) UnsubscribeFromLobby(playerID string) {
 	delete(m.lobbySubscribers, playerID)
 }
 
+// activeRoomsCountLocked returns the number of active rooms (waiting or in-play).
+// Concluded matches in PhaseFinished do not count toward active room capacity.
+// Caller must hold m.mu.
+func (m *LobbyManager) activeRoomsCountLocked() int {
+	count := 0
+	for _, r := range m.rooms {
+		if r.Phase != PhaseFinished {
+			count++
+		}
+	}
+	return count
+}
+
 // GetLobbySnapshot generates the current waiting rooms snapshot sorted oldest first.
 func (m *LobbyManager) GetLobbySnapshot() LobbySnapshotPayload {
 	m.mu.RLock()
@@ -161,7 +195,7 @@ func (m *LobbyManager) GetLobbySnapshot() LobbySnapshotPayload {
 
 	return LobbySnapshotPayload{
 		Rooms:      waitingRooms,
-		TotalRooms: len(m.rooms),
+		TotalRooms: m.activeRoomsCountLocked(),
 		MaxRooms:   m.maxRooms,
 	}
 }
@@ -174,8 +208,8 @@ func (m *LobbyManager) CreateRoom(playerID string) (*Room, error) {
 	}
 
 	m.mu.Lock()
-	if len(m.rooms) >= m.maxRooms {
-		total := len(m.rooms)
+	if m.activeRoomsCountLocked() >= m.maxRooms {
+		total := m.activeRoomsCountLocked()
 		m.mu.Unlock()
 		slog.Warn("room creation rejected: room cap reached", "playerId", playerID, "totalRooms", total, "maxRooms", m.maxRooms)
 		return nil, ErrRoomCapReached
@@ -213,7 +247,7 @@ func (m *LobbyManager) CreateRoom(playerID string) (*Room, error) {
 		CreatedAt: room.CreatedAt,
 	}
 
-	totalRooms := len(m.rooms)
+	totalRooms := m.activeRoomsCountLocked()
 	subscribers := m.subscriberListLocked()
 	m.mu.Unlock()
 
@@ -258,7 +292,7 @@ func (m *LobbyManager) CancelRoom(playerID string) error {
 	_ = m.registry.ClearCurrentRoom(playerID)
 	m.lobbySubscribers[playerID] = struct{}{}
 
-	totalRooms := len(m.rooms)
+	totalRooms := m.activeRoomsCountLocked()
 	removedRoomID := room.ID
 	subscribers := m.subscriberListLocked()
 	m.mu.Unlock()
@@ -384,7 +418,7 @@ func (m *LobbyManager) JoinRoom(playerID string, roomID string) (*Room, error) {
 		GuestReady: false,
 	}
 
-	totalRooms := len(m.rooms)
+	totalRooms := m.activeRoomsCountLocked()
 	subscribers := m.subscriberListLocked()
 	m.mu.Unlock()
 
@@ -458,6 +492,12 @@ func (m *LobbyManager) ReadyRoom(playerID string) error {
 	var hostPlacementState, guestPlacementState RoomStateView
 	if transitionToPlacement {
 		room.Phase = PhasePlacement
+		if room.GameID == "" {
+			room.GameID = generateGameID()
+		}
+		if room.StartedAt.IsZero() {
+			room.StartedAt = m.clock.Now()
+		}
 		placementDeadline := m.clock.Now().Add(60 * time.Second)
 		room.PlacementDeadline = placementDeadline
 		roomID := room.ID
@@ -1013,6 +1053,8 @@ func (m *LobbyManager) FireShot(playerID string, cell game.Coord) error {
 	hostID := room.HostPlayerID
 	guestID := room.GuestPlayerID
 
+	var wonSubscribers []string
+	var wonTotalRooms int
 	if isWon {
 		room.Phase = PhaseFinished
 		room.WinnerPlayerID = playerID
@@ -1020,6 +1062,9 @@ func (m *LobbyManager) FireShot(playerID string, cell game.Coord) error {
 		winnerID = playerID
 		endReason = "all_sunk"
 		slog.Info("game over: all ships sunk", "roomId", room.ID, "winnerId", winnerID, "totalShots", len(room.ShotLog))
+		m.recordGameLocked(room)
+		wonSubscribers = m.subscriberListLocked()
+		wonTotalRooms = m.activeRoomsCountLocked()
 	} else {
 		nextTurnID = opponentID
 		room.TurnPlayerID = nextTurnID
@@ -1059,6 +1104,12 @@ func (m *LobbyManager) FireShot(playerID string, cell game.Coord) error {
 		if guestID != "" {
 			m.send(guestID, "game.over", gameOverPayload)
 		}
+		m.broadcast(wonSubscribers, "lobby.update", LobbyUpdatePayload{
+			Action:     "remove",
+			RoomID:     roomID,
+			TotalRooms: wonTotalRooms,
+			MaxRooms:   m.maxRooms,
+		})
 	} else {
 		turnPayload := map[string]any{
 			"turnPlayerId": nextTurnID,
@@ -1147,6 +1198,8 @@ func (m *LobbyManager) expireTurnTimer(roomID string) {
 	hostID := room.HostPlayerID
 	guestID := room.GuestPlayerID
 
+	var wonSubscribers []string
+	var wonTotalRooms int
 	if isWon {
 		room.Phase = PhaseFinished
 		room.WinnerPlayerID = activePlayerID
@@ -1154,6 +1207,9 @@ func (m *LobbyManager) expireTurnTimer(roomID string) {
 		winnerID = activePlayerID
 		endReason = "all_sunk"
 		slog.Info("game over via auto-shot: all ships sunk", "roomId", room.ID, "winnerId", winnerID, "totalShots", len(room.ShotLog))
+		m.recordGameLocked(room)
+		wonSubscribers = m.subscriberListLocked()
+		wonTotalRooms = m.activeRoomsCountLocked()
 	} else {
 		nextTurnID = opponentID
 		room.TurnPlayerID = nextTurnID
@@ -1193,6 +1249,12 @@ func (m *LobbyManager) expireTurnTimer(roomID string) {
 		if guestID != "" {
 			m.send(guestID, "game.over", gameOverPayload)
 		}
+		m.broadcast(wonSubscribers, "lobby.update", LobbyUpdatePayload{
+			Action:     "remove",
+			RoomID:     roomID,
+			TotalRooms: wonTotalRooms,
+			MaxRooms:   m.maxRooms,
+		})
 	} else {
 		turnPayload := map[string]any{
 			"turnPlayerId": nextTurnID,
@@ -1296,6 +1358,7 @@ func (m *LobbyManager) leaveMatchLocked(room *Room, playerID string) error {
 	room.Phase = PhaseFinished
 	room.WinnerPlayerID = opponentID
 	room.EndReason = "forfeit"
+	m.recordGameLocked(room)
 
 	// Clear leaving player's room attachment
 	_ = m.registry.ClearCurrentRoom(playerID)
@@ -1306,6 +1369,10 @@ func (m *LobbyManager) leaveMatchLocked(room *Room, playerID string) error {
 	if opponentID != "" {
 		opponentView = m.buildRoomStateViewLocked(room, opponentRole)
 	}
+
+	totalRooms := m.activeRoomsCountLocked()
+	subscribers := m.subscriberListLocked()
+	roomID := room.ID
 
 	slog.Info("player forfeited match", "roomId", room.ID, "playerId", playerID, "opponentId", opponentID, "totalShots", totalShots)
 	m.mu.Unlock()
@@ -1322,6 +1389,19 @@ func (m *LobbyManager) leaveMatchLocked(room *Room, playerID string) error {
 		})
 		m.send(opponentID, "room.state", opponentView)
 	}
+
+	otherSubscribers := make([]string, 0, len(subscribers))
+	for _, sub := range subscribers {
+		if sub != playerID {
+			otherSubscribers = append(otherSubscribers, sub)
+		}
+	}
+	m.broadcast(otherSubscribers, "lobby.update", LobbyUpdatePayload{
+		Action:     "remove",
+		RoomID:     roomID,
+		TotalRooms: totalRooms,
+		MaxRooms:   m.maxRooms,
+	})
 
 	return nil
 }
@@ -1355,16 +1435,295 @@ func (m *LobbyManager) leaveFinishedLocked(room *Room, playerID string) error {
 		}
 	}
 
+	// If a rematch offer was pending or active, flag for notification after unlock
+	notifyOtherRematchCancelled := false
+	if otherInRoom && otherID != "" {
+		if room.HostRematch || room.GuestRematch {
+			room.HostRematch = false
+			room.GuestRematch = false
+			notifyOtherRematchCancelled = true
+		}
+	}
+
 	// If other player has also left, remove room from memory
+	roomDeleted := false
 	if !otherInRoom {
 		delete(m.rooms, room.ID)
+		roomDeleted = true
 		slog.Info("both players left finished room, cleaned up", "roomId", room.ID)
 	}
 
 	slog.Info("player left finished room, returned to lobby", "roomId", room.ID, "playerId", playerID)
+
+	totalRooms := m.activeRoomsCountLocked()
+	subscribers := m.subscriberListLocked()
+	roomID := room.ID
 	m.mu.Unlock()
 
+	if notifyOtherRematchCancelled {
+		m.send(otherID, "rematch.cancelled", map[string]any{
+			"reason": "left",
+		})
+	}
+
 	m.send(playerID, "lobby.snapshot", m.GetLobbySnapshot())
+
+	if roomDeleted {
+		m.broadcast(subscribers, "lobby.update", LobbyUpdatePayload{
+			Action:     "remove",
+			RoomID:     roomID,
+			TotalRooms: totalRooms,
+			MaxRooms:   m.maxRooms,
+		})
+	}
+
+	return nil
+}
+
+// recordGameLocked writes the finished match record to SQLite if a store is configured.
+// Caller must hold m.mu.
+func (m *LobbyManager) recordGameLocked(room *Room) {
+	if m.store == nil || room == nil || room.Recorded {
+		return
+	}
+	room.Recorded = true
+	room.EndedAt = m.clock.Now()
+
+	var winnerSlot *int
+	if room.WinnerPlayerID != "" {
+		var slot int
+		if room.WinnerPlayerID == room.HostPlayerID {
+			slot = 1
+		} else if room.WinnerPlayerID == room.GuestPlayerID {
+			slot = 2
+		}
+		if slot != 0 {
+			winnerSlot = &slot
+		}
+	}
+
+	host, _ := m.registry.GetByID(room.HostPlayerID)
+	guest, _ := m.registry.GetByID(room.GuestPlayerID)
+	hostName := "Host Commander"
+	if host != nil && host.DisplayName != "" {
+		hostName = host.DisplayName
+	}
+	guestName := "Guest Commander"
+	if guest != nil && guest.DisplayName != "" {
+		guestName = guest.DisplayName
+	}
+
+	shotLogBytes, err := json.Marshal(room.ShotLog)
+	if err != nil {
+		slog.Error("failed to marshal shot log for game record", "roomId", room.ID, "gameId", room.GameID, "error", err)
+		shotLogBytes = []byte("[]")
+	}
+
+	startedAt := room.StartedAt
+	if startedAt.IsZero() {
+		startedAt = room.CreatedAt
+	}
+
+	gameID := room.GameID
+	if gameID == "" {
+		gameID = generateGameID()
+		room.GameID = gameID
+	}
+
+	record := &store.GameRecord{
+		ID:          gameID,
+		StartedAt:   startedAt,
+		EndedAt:     room.EndedAt,
+		Player1Name: hostName,
+		Player2Name: guestName,
+		WinnerSlot:  winnerSlot,
+		EndReason:   room.EndReason,
+		TotalShots:  len(room.ShotLog),
+		ShotLog:     string(shotLogBytes),
+	}
+
+	go func(rec *store.GameRecord) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.store.SaveGame(ctx, rec); err != nil {
+			slog.Error("failed to persist game record to store", "gameId", rec.ID, "error", err)
+		} else {
+			slog.Info("game record persisted successfully", "gameId", rec.ID, "reason", rec.EndReason, "totalShots", rec.TotalShots)
+		}
+	}(record)
+}
+
+// AcceptRematch registers a player's acceptance of a rematch offer.
+// If both players mutually accept, the room restarts directly into PhasePlacement with re-randomized first turn on battle start.
+func (m *LobbyManager) AcceptRematch(playerID string) error {
+	m.mu.Lock()
+	currentRoomID, err := m.registry.GetPlayerRoom(playerID)
+	if err != nil || currentRoomID == "" {
+		m.mu.Unlock()
+		return ErrNotInRoom
+	}
+
+	room, ok := m.rooms[currentRoomID]
+	if !ok {
+		m.mu.Unlock()
+		return ErrRoomNotFound
+	}
+
+	if room.Phase != PhaseFinished {
+		m.mu.Unlock()
+		return ErrNotInFinished
+	}
+
+	if room.EndReason != "all_sunk" {
+		m.mu.Unlock()
+		return ErrRematchNotAllowed
+	}
+
+	isHost := (playerID == room.HostPlayerID)
+	isGuest := (playerID == room.GuestPlayerID)
+	if !isHost && !isGuest {
+		m.mu.Unlock()
+		return ErrNotInRoom
+	}
+
+	var opponentID string
+	if isHost {
+		opponentID = room.GuestPlayerID
+	} else {
+		opponentID = room.HostPlayerID
+	}
+
+	if opponentID == "" {
+		m.mu.Unlock()
+		return ErrOpponentNotPresent
+	}
+
+	// Opponent must still be attached to this room and connected
+	oppRoom, err := m.registry.GetPlayerRoom(opponentID)
+	if err != nil || oppRoom != room.ID {
+		m.mu.Unlock()
+		return ErrOpponentNotPresent
+	}
+	opp, oppOk := m.registry.GetByID(opponentID)
+	if !oppOk || opp.ConnectionState == StateDisconnected {
+		m.mu.Unlock()
+		return ErrOpponentNotPresent
+	}
+
+	if isHost {
+		room.HostRematch = true
+	} else {
+		room.GuestRematch = true
+	}
+
+	slog.Info("rematch offer accepted by player", "roomId", room.ID, "playerId", playerID, "hostRematch", room.HostRematch, "guestRematch", room.GuestRematch)
+
+	mutualAccepted := room.HostRematch && room.GuestRematch
+
+	if !mutualAccepted {
+		m.mu.Unlock()
+		// Broadcast rematch.offered to both players so local UI and opponent UI update
+		m.send(opponentID, "rematch.offered", map[string]any{
+			"by": playerID,
+		})
+		m.send(playerID, "rematch.offered", map[string]any{
+			"by": playerID,
+		})
+		return nil
+	}
+
+	// Mutual rematch accepted: reset match state and transition directly to PhasePlacement
+	room.Phase = PhasePlacement
+	room.HostFleet = nil
+	room.GuestFleet = nil
+	room.HostFleetConfirmed = false
+	room.GuestFleetConfirmed = false
+	room.HostBoard = nil
+	room.GuestBoard = nil
+	room.ShotLog = make([]ShotRecord, 0)
+	room.WinnerPlayerID = ""
+	room.EndReason = ""
+	room.HostRematch = false
+	room.GuestRematch = false
+	room.GameID = generateGameID()
+	room.StartedAt = m.clock.Now()
+	room.Recorded = false
+
+	placementDeadline := m.clock.Now().Add(60 * time.Second)
+	room.PlacementDeadline = placementDeadline
+	roomID := room.ID
+	room.PlacementTimer = m.clock.AfterFunc(60*time.Second, func() {
+		m.expirePlacementTimer(roomID)
+	})
+
+	hostView := m.buildRoomStateViewLocked(room, "host")
+	guestView := m.buildRoomStateViewLocked(room, "guest")
+	totalRooms := m.activeRoomsCountLocked()
+	subscribers := m.subscriberListLocked()
+
+	slog.Info("mutual rematch confirmed, room restarting into placement", "roomId", room.ID, "newGameId", room.GameID, "deadline", placementDeadline)
+	m.mu.Unlock()
+
+	m.send(room.HostPlayerID, "room.state", hostView)
+	m.send(room.GuestPlayerID, "room.state", guestView)
+
+	m.broadcast(subscribers, "lobby.update", LobbyUpdatePayload{
+		Action:     "remove",
+		RoomID:     room.ID,
+		TotalRooms: totalRooms,
+		MaxRooms:   m.maxRooms,
+	})
+	return nil
+}
+
+// DeclineRematch explicitly declines a pending rematch offer and cancels it for both players.
+func (m *LobbyManager) DeclineRematch(playerID string) error {
+	m.mu.Lock()
+	currentRoomID, err := m.registry.GetPlayerRoom(playerID)
+	if err != nil || currentRoomID == "" {
+		m.mu.Unlock()
+		return ErrNotInRoom
+	}
+
+	room, ok := m.rooms[currentRoomID]
+	if !ok {
+		m.mu.Unlock()
+		return ErrRoomNotFound
+	}
+
+	if room.Phase != PhaseFinished {
+		m.mu.Unlock()
+		return ErrNotInFinished
+	}
+
+	isHost := (playerID == room.HostPlayerID)
+	isGuest := (playerID == room.GuestPlayerID)
+	if !isHost && !isGuest {
+		m.mu.Unlock()
+		return ErrNotInRoom
+	}
+
+	var opponentID string
+	if isHost {
+		opponentID = room.GuestPlayerID
+	} else {
+		opponentID = room.HostPlayerID
+	}
+
+	room.HostRematch = false
+	room.GuestRematch = false
+
+	slog.Info("rematch declined", "roomId", room.ID, "playerId", playerID)
+	m.mu.Unlock()
+
+	if opponentID != "" {
+		m.send(opponentID, "rematch.cancelled", map[string]any{
+			"reason": "declined",
+		})
+	}
+	m.send(playerID, "rematch.cancelled", map[string]any{
+		"reason": "declined",
+	})
 	return nil
 }
 
@@ -1426,7 +1785,7 @@ func (m *LobbyManager) leaveReadyUpLocked(room *Room, playerID string) error {
 			CreatedAt: room.CreatedAt,
 		}
 
-		totalRooms := len(m.rooms)
+		totalRooms := m.activeRoomsCountLocked()
 		subscribers := m.subscriberListLocked()
 		m.mu.Unlock()
 
@@ -1482,7 +1841,8 @@ func (m *LobbyManager) leaveReadyUpLocked(room *Room, playerID string) error {
 		m.lobbySubscribers[guestID] = struct{}{}
 	}
 
-	totalRooms := len(m.rooms)
+	totalRooms := m.activeRoomsCountLocked()
+	subscribers := m.subscriberListLocked()
 	m.mu.Unlock()
 
 	slog.Info("host left ready-up, room closed", "roomId", roomID, "hostId", hostID, "guestId", guestID, "totalRooms", totalRooms)
@@ -1492,6 +1852,19 @@ func (m *LobbyManager) leaveReadyUpLocked(room *Room, playerID string) error {
 	if guestID != "" {
 		m.send(guestID, "lobby.snapshot", m.GetLobbySnapshot())
 	}
+
+	otherSubscribers := make([]string, 0, len(subscribers))
+	for _, sub := range subscribers {
+		if sub != hostID && sub != guestID {
+			otherSubscribers = append(otherSubscribers, sub)
+		}
+	}
+	m.broadcast(otherSubscribers, "lobby.update", LobbyUpdatePayload{
+		Action:     "remove",
+		RoomID:     roomID,
+		TotalRooms: totalRooms,
+		MaxRooms:   m.maxRooms,
+	})
 
 	return nil
 }
@@ -1564,6 +1937,57 @@ func (m *LobbyManager) HandleDisconnect(playerID string) {
 		return
 	}
 
+	// Finished phase: cancel any pending rematch offers and notify opponent
+	if room.Phase == PhaseFinished {
+		var opponentID string
+		if playerID == room.HostPlayerID {
+			opponentID = room.GuestPlayerID
+		} else {
+			opponentID = room.HostPlayerID
+		}
+
+		hadRematchOffer := room.HostRematch || room.GuestRematch
+		room.HostRematch = false
+		room.GuestRematch = false
+
+		_ = m.registry.ClearCurrentRoom(playerID)
+
+		otherInRoom := false
+		if opponentID != "" {
+			if oppRoom, err := m.registry.GetPlayerRoom(opponentID); err == nil && oppRoom == room.ID {
+				otherInRoom = true
+			}
+		}
+
+		roomDeleted := false
+		if !otherInRoom {
+			delete(m.rooms, room.ID)
+			roomDeleted = true
+			slog.Info("finished room cleaned up on disconnect", "roomId", room.ID, "playerId", playerID)
+		}
+
+		totalRooms := m.activeRoomsCountLocked()
+		subscribers := m.subscriberListLocked()
+		roomID := room.ID
+		m.mu.Unlock()
+
+		if hadRematchOffer && opponentID != "" {
+			m.send(opponentID, "rematch.cancelled", map[string]any{
+				"reason": "disconnected",
+			})
+		}
+
+		if roomDeleted {
+			m.broadcast(subscribers, "lobby.update", LobbyUpdatePayload{
+				Action:     "remove",
+				RoomID:     roomID,
+				TotalRooms: totalRooms,
+				MaxRooms:   m.maxRooms,
+			})
+		}
+		return
+	}
+
 	m.mu.Unlock()
 }
 
@@ -1630,7 +2054,19 @@ func (m *LobbyManager) expireDisconnectGrace(roomID string, playerID string, isH
 			room.WinnerPlayerID = ""
 			room.EndReason = "abandoned"
 			slog.Info("match abandoned: both players disconnected when grace period expired", "roomId", roomID)
+			m.recordGameLocked(room)
+			delete(m.rooms, roomID)
+			_ = m.registry.ClearCurrentRoom(playerID)
+			_ = m.registry.ClearCurrentRoom(opponentID)
+			totalRooms := m.activeRoomsCountLocked()
+			subscribers := m.subscriberListLocked()
 			m.mu.Unlock()
+			m.broadcast(subscribers, "lobby.update", LobbyUpdatePayload{
+				Action:     "remove",
+				RoomID:     roomID,
+				TotalRooms: totalRooms,
+				MaxRooms:   m.maxRooms,
+			})
 			return
 		}
 
@@ -1638,10 +2074,14 @@ func (m *LobbyManager) expireDisconnectGrace(roomID string, playerID string, isH
 		room.Phase = PhaseFinished
 		room.WinnerPlayerID = opponentID
 		room.EndReason = "disconnect_timeout"
+		_ = m.registry.ClearCurrentRoom(playerID)
 		totalShots := len(room.ShotLog)
 		oppView := m.buildRoomStateViewLocked(room, opponentRole)
 
 		slog.Info("game over via disconnect timeout", "roomId", roomID, "winnerId", opponentID, "loserId", playerID, "totalShots", totalShots)
+		m.recordGameLocked(room)
+		totalRooms := m.activeRoomsCountLocked()
+		subscribers := m.subscriberListLocked()
 		m.mu.Unlock()
 
 		m.send(opponentID, "game.over", map[string]any{
@@ -1650,6 +2090,12 @@ func (m *LobbyManager) expireDisconnectGrace(roomID string, playerID string, isH
 			"totalShots":     totalShots,
 		})
 		m.send(opponentID, "room.state", oppView)
+		m.broadcast(subscribers, "lobby.update", LobbyUpdatePayload{
+			Action:     "remove",
+			RoomID:     roomID,
+			TotalRooms: totalRooms,
+			MaxRooms:   m.maxRooms,
+		})
 		return
 	}
 
@@ -1675,7 +2121,7 @@ func (m *LobbyManager) expireWaitingRoom(roomID string, hostID string) {
 	delete(m.rooms, roomID)
 	_ = m.registry.ClearCurrentRoom(hostID)
 
-	totalRooms := len(m.rooms)
+	totalRooms := m.activeRoomsCountLocked()
 	subscribers := m.subscriberListLocked()
 	m.mu.Unlock()
 
@@ -1789,9 +2235,27 @@ func (m *LobbyManager) broadcast(playerIDs []string, msgType string, payload any
 	}
 }
 
-// TotalRooms returns the total number of registered rooms (waiting and active).
+// TotalRooms returns the total number of registered active rooms (waiting and in-play).
 func (m *LobbyManager) TotalRooms() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.activeRoomsCountLocked()
+}
+
+// TotalRoomsInMemory returns the total number of all room objects in memory, including finished.
+func (m *LobbyManager) TotalRoomsInMemory() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return len(m.rooms)
+}
+
+// SetRoomFinishedForTesting sets a room's state to finished for integration testing purposes.
+func (m *LobbyManager) SetRoomFinishedForTesting(roomID, winnerID, reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if room, ok := m.rooms[roomID]; ok {
+		room.Phase = PhaseFinished
+		room.WinnerPlayerID = winnerID
+		room.EndReason = reason
+	}
 }

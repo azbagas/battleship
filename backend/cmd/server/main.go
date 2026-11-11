@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/azbagas/battleship/backend/internal/lobby"
+	"github.com/azbagas/battleship/backend/internal/store"
 	"github.com/azbagas/battleship/backend/internal/ws"
 )
 
@@ -78,8 +79,27 @@ func main() {
 	}
 
 	addr := fmt.Sprintf(":%s", port)
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = os.Getenv("SQLITE_PATH")
+	}
+	if dbPath == "" {
+		dbPath = "battleship.db"
+	}
+
+	gameStore, err := store.New(dbPath)
+	if err != nil {
+		slog.Error("failed to initialize sqlite store", "dbPath", dbPath, "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := gameStore.Close(); err != nil {
+			slog.Error("error closing sqlite store", "error", err)
+		}
+	}()
+
 	sessionRegistry := lobby.NewSessionRegistry()
-	lobbyManager := lobby.NewLobbyManager(sessionRegistry)
+	lobbyManager := lobby.NewLobbyManager(sessionRegistry, lobby.WithStore(gameStore))
 	srv := &http.Server{
 		Addr:         addr,
 		Handler:      routes(sessionRegistry, lobbyManager),

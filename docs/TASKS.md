@@ -4,13 +4,13 @@
      Tag tasks with feature IDs. Each task has a "Done when" line. -->
 
 ## Current focus
-In progress: none (ready for T-16 [F-07])
+In progress: none (ready for T-19 [F-08])
 
 Blocked: nothing
 
 Known issues: none
 
-Next up: T-16 [F-07] Implement `internal/store` SQLite persistence (`modernc.org/sqlite`) to write a `games` record once per finished match (`all_sunk`, `forfeit`, `disconnect_timeout`, `abandoned`) including shot count and JSON `shot_log`.
+Next up: T-19 [F-08] Add backend security and operational hardening: WebSocket `Origin` check, per-connection message rate limiting and max payload size, per-IP connection cap, graceful `SIGTERM` shutdown, and `docs/protocol.md` specification.
 
 <!-- Update this block at the end of every session. If it passes ~15 lines, move it to STATUS.md. -->
 
@@ -65,11 +65,11 @@ Next up: T-16 [F-07] Implement `internal/store` SQLite persistence (`modernc.org
   Done when: refreshing or dropping connection briefly resumes the match, opponent sees the 60s disconnect banner, confirming **Leave game** forfeits immediately, and reconnecting after a server restart returns cleanly to the lobby with a notice.
 
 ### F-07 Game Over, Rematch & Match History Recording
-- [ ] T-16 [F-07] Implement `internal/store` SQLite persistence (`modernc.org/sqlite`) to write a `games` record once per finished match (`all_sunk`, `forfeit`, `disconnect_timeout`, `abandoned`) including shot count and JSON `shot_log`.
+- [x] T-16 [F-07] Implement `internal/store` SQLite persistence (`modernc.org/sqlite`) to write a `games` record once per finished match (`all_sunk`, `forfeit`, `disconnect_timeout`, `abandoned`) including shot count and JSON `shot_log`.
   Done when: store unit tests verify schema creation and accurate row insertion for all four game-end reasons without CGO.
-- [ ] T-17 [F-07] Implement backend rematch flow (`rematch.accept`, `rematch.decline`, `rematch.offered`, `rematch.cancelled`) after normal game ends, starting a new placement phase with re-randomized first turn when both accept.
+- [x] T-17 [F-07] Implement backend rematch flow (`rematch.accept`, `rematch.decline`, `rematch.offered`, `rematch.cancelled`) after normal game ends, starting a new placement phase with re-randomized first turn when both accept.
   Done when: room tests verify mutual rematch starts placement with the same two players, while decline/leave/disconnect cancels the offer and notifies the remaining player.
-- [ ] T-18 [F-07] Build frontend Game Over screen showing match outcome and reason, **Rematch** button (hidden on forfeit/abandonment) with waiting/cancelled states, and **Back to lobby** button.
+- [x] T-18 [F-07] Build frontend Game Over screen showing match outcome and reason, **Rematch** button (hidden on forfeit/abandonment) with waiting/cancelled states, and **Back to lobby** button.
   Done when: two players finishing a normal game can mutually accept a rematch or return to the lobby with clear status feedback.
 
 ### F-08 Responsive UX, Accessibility & Fair Play
@@ -107,6 +107,10 @@ Next up: T-16 [F-07] Implement `internal/store` SQLite persistence (`modernc.org
 - 2026-11-10: T-13 implemented frontend Battle screen (`BattleScreen.tsx`) featuring primary Target Radar Grid (10×10), Defensive Fleet Grid (10×10), 30s urgency turn timer with countdown progress bar and `<10s` red alert pulsing, friendly/hostile remaining ships rosters with health pips and sunk badges, colorblind-accessible symbols (`•` miss, `✕` hit, sunken hull outline), live tactical combat event log with `AUTO` badges, responsive mobile tab switcher (supporting 360px viewports without horizontal scrolling), surrender confirmation modal, and Game Over overlay announcing victory/defeat with lobby return CTA. Verified with 13 frontend test suites (89 passing tests), clean ESLint, and zero TypeScript build errors.
 - 2026-11-10: T-14 & T-15 implemented disconnect handling, heartbeats, reconnection, and forfeit across backend and frontend (F-06). Backend incorporates a 15s WebSocket ping/pong heartbeat with 5s timeout, 60s disconnect grace period across ready-up, placement, and battle phases (`opponent.disconnected`, `opponent.reconnected`), concurrent turn/placement timer execution during disconnect, grace timeout resolution (`disconnect_timeout` forfeit vs mutual `abandoned`), and explicit `game.leave` forfeit in placement/battle phases. Frontend features exponential backoff auto-reconnection, `OpponentDisconnectBanner` with live seconds countdown (<10s urgency styling), Leave Game confirmation modals in `PlacementScreen` and `BattleScreen`, and server-restart lost-game notice alert in `LobbyScreen`. Verified with backend unit/integration tests (`-race`), 14 frontend test suites (100 passing tests), and clean builds.
 - 2026-11-10: Fixed reconnection during active placement/battle: `HandleReconnect` was returning internal `*Room` containing active `Timer` channels (`<-chan time.Time`) which caused JSON marshaling failures on `hello.ok`. Updated `HandleReconnect` to return filtered `*RoomStateView` and register WebSocket connection senders after `hello.ok` handshake, ensuring clean JSON serialization, zero coordinate leakage, and guaranteed `hello.ok` delivery as the first message on the wire. Added integration test `TestHandler_ReconnectInPlacementRestoresState`.
+- 2026-11-11: T-16 implemented pure-Go SQLite persistence (`internal/store`) using `modernc.org/sqlite` without CGO. Automatically initializes the `games` table schema with WAL journal mode and 5s busy timeout. Integrated `LobbyManager` to write an immutable summary record exactly once per completed match (`all_sunk`, `forfeit`, `disconnect_timeout`, `abandoned`), persisting timestamps, display names, winner slot, total shot count, and JSON-marshaled `shot_log` asynchronously with context timeouts. Verified with unit and concurrency tests (`-race`).
+- 2026-11-11: T-17 implemented backend rematch orchestration (`rematch.accept`, `rematch.decline`, `rematch.offered`, `rematch.cancelled`). Rematch is permitted strictly after `all_sunk` match conclusions while both commanders remain connected; forfeit, disconnect timeout, and abandonment reject rematch requests with `REMATCH_NOT_ALLOWED`. Unilateral acceptance broadcasts `rematch.offered`; mutual acceptance resets fleet, boards, and shot logs, creates a new game record, and restarts directly into the 60s placement phase with turn re-randomization on battle start. Explicit decline, room departure, or connection drop immediately cancels any pending rematch offer and notifies the counterpart. Verified with unit and WebSocket integration tests (`-race`).
+- 2026-11-11: T-18 implemented the frontend Game Over screen (`GameOverScreen.tsx`) and complete rematch UX. Displays high-contrast victory/defeat debrief banners, match outcome reasons (hostile fleet destroyed, surrendered, disconnect grace timeout, or mutual abandonment), and combat statistics (total shots fired, hit accuracy %, ships sunk/lost). Rematch button is conditionally enabled exclusively after `all_sunk` finishes, with reactive waiting ("Rematch Offered — Waiting..."), opponent request ("Accept Rematch"), and cancelled notices. Surrender/forfeit or disconnect timeout cleanly hides the Rematch action and offers a direct "Back to Lobby" CTA. Routing integrated in `App.tsx` when `activeRoom.phase === 'finished'`. Verified with 15 frontend test suites (113 passing tests), clean ESLint, and zero TypeScript build errors.
+- 2026-11-11: Fixed active room capacity accounting and lobby subscriber synchronization: concluded matches (`PhaseFinished`) are excluded from active capacity counts per PRD F-02 ("10 total rooms (waiting or in-play)"), ensuring players returning to the lobby see 0 active rooms instead of ghost in-flight counts. Added `lobby.update` broadcasts on room deletion, departure, and match conclusions so all players in the lobby receive instant capacity updates and stay perfectly synchronized. Added unit tests `TestFinishedMatch_ReturnToLobbyActiveRoomsCountAndUpdate` and `TestFinishedMatch_OpponentDisconnectCleansUpRoom`.
 
 ## Archive
 <!-- Move finished version groups here as one-line summaries, e.g. "v1 shipped: F-01 to F-03." -->

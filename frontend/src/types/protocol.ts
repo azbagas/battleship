@@ -25,6 +25,10 @@ export type MessageType =
   | 'game.over'
   | 'opponent.disconnected'
   | 'opponent.reconnected'
+  | 'rematch.accept'
+  | 'rematch.decline'
+  | 'rematch.offered'
+  | 'rematch.cancelled'
   | string
 
 export interface InboundMessage<T = unknown> {
@@ -170,6 +174,14 @@ export interface OpponentDisconnectedPayload {
 
 export type OpponentReconnectedPayload = Record<string, never>
 
+export interface RematchOfferedPayload {
+  by: string
+}
+
+export interface RematchCancelledPayload {
+  reason: 'declined' | 'left' | 'disconnected' | string
+}
+
 export interface RoomStatePayload {
   roomId: string
   phase: RoomPhase
@@ -221,6 +233,8 @@ export const ErrorCode = {
   CellAlreadyTargeted: 'CELL_ALREADY_TARGETED',
   InvalidCoordinate: 'INVALID_COORDINATE',
   GameOver: 'GAME_OVER',
+  RematchNotAllowed: 'REMATCH_NOT_ALLOWED',
+  NotInFinished: 'NOT_IN_FINISHED',
 } as const
 
 export type ErrorCodeType = (typeof ErrorCode)[keyof typeof ErrorCode] | string

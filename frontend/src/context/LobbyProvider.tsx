@@ -14,6 +14,8 @@ import {
   PlacedShip,
   PlacementConfirmedPayload,
   PlacementOpponentReadyPayload,
+  RematchCancelledPayload,
+  RematchOfferedPayload,
   RoomReadyStatePayload,
   RoomStatePayload,
   ShotResult,
@@ -76,6 +78,17 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
   const [opponentDisconnectDeadline, setOpponentDisconnectDeadline] = useState<string | null>(null)
   const [serverRestartNotice, setServerRestartNotice] = useState<string | null>(null)
 
+  // Rematch states
+  const [rematchStatus, setRematchStatus] = useState<
+    'idle' | 'offered_by_me' | 'offered_by_opponent' | 'cancelled'
+  >('idle')
+  const [rematchCancelReason, setRematchCancelReason] = useState<string | null>(null)
+
+  const resetRematchState = useCallback(() => {
+    setRematchStatus('idle')
+    setRematchCancelReason(null)
+  }, [])
+
   const isMyTurn = Boolean(
     session.player &&
       turnPlayerId &&
@@ -112,8 +125,9 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       setOwnFleet([])
       setPlacementDeadline(null)
       resetBattleState()
+      resetRematchState()
     }
-  }, [session.player, resetBattleState])
+  }, [session.player, resetBattleState, resetRematchState])
 
   // Wire WebSocket message listeners
   useEffect(() => {
@@ -218,6 +232,7 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       setPlacementDeadline(null)
       setOpponentDisconnectDeadline(null)
       resetBattleState()
+      resetRematchState()
     })
 
     const unsubUpdate = client.onMessage<LobbyUpdatePayload>('lobby.update', (payload) => {
@@ -247,6 +262,11 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
     const unsubRoomState = client.onMessage<RoomStatePayload>('room.state', (payload) => {
       if (!payload || !payload.roomId) return
       setActiveRoom(payload)
+      if (payload.phase === 'placement') {
+        setGameOverResult(null)
+        resetBattleState()
+        resetRematchState()
+      }
       if (payload.opponentDisconnected && payload.opponentGraceDeadline) {
         setOpponentDisconnectDeadline(payload.opponentGraceDeadline)
       } else {
@@ -406,6 +426,26 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       },
     )
 
+    const unsubRematchOffered = client.onMessage<RematchOfferedPayload>(
+      'rematch.offered',
+      (payload) => {
+        if (!payload) return
+        if (payload.by === session.player?.playerId) {
+          setRematchStatus('offered_by_me')
+        } else {
+          setRematchStatus('offered_by_opponent')
+        }
+      },
+    )
+
+    const unsubRematchCancelled = client.onMessage<RematchCancelledPayload>(
+      'rematch.cancelled',
+      (payload) => {
+        setRematchStatus('cancelled')
+        setRematchCancelReason(payload?.reason || 'cancelled')
+      },
+    )
+
     const unsubError = client.onError((err: ErrorPayload) => {
       setIsCreating(false)
       setJoiningRoomId(null)
@@ -453,6 +493,9 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
         case ErrorCode.GameOver:
           setLobbyError('The engagement has already concluded.')
           break
+        case ErrorCode.RematchNotAllowed:
+          setLobbyError('Rematch is only available following a normal completed game.')
+          break
         default:
           setLobbyError(err.message || 'An unexpected error occurred.')
       }
@@ -472,9 +515,11 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       unsubGameOver()
       unsubOpponentDisconnected()
       unsubOpponentReconnected()
+      unsubRematchOffered()
+      unsubRematchCancelled()
       unsubError()
     }
-  }, [client, session.player, resetBattleState])
+  }, [client, session.player, resetBattleState, resetRematchState])
 
   const isRoomCapReached = totalRooms >= maxRooms
 
@@ -554,6 +599,16 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
     [isMyTurn, gameOverResult, targetShots, client],
   )
 
+  const acceptRematch = useCallback(() => {
+    client.send('rematch.accept', {})
+  }, [client])
+
+  const declineRematch = useCallback(() => {
+    client.send('rematch.decline', {})
+    setRematchStatus('cancelled')
+    setRematchCancelReason('declined')
+  }, [client])
+
   const value = useMemo(
     () => ({
       rooms,
@@ -593,6 +648,10 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       serverRestartNotice,
       clearServerRestartNotice,
       forfeitGame,
+      rematchStatus,
+      rematchCancelReason,
+      acceptRematch,
+      declineRematch,
     }),
     [
       rooms,
@@ -632,6 +691,10 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       serverRestartNotice,
       clearServerRestartNotice,
       forfeitGame,
+      rematchStatus,
+      rematchCancelReason,
+      acceptRematch,
+      declineRematch,
     ],
   )
 

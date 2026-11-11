@@ -50,6 +50,10 @@ describe('OpponentDisconnectBanner', () => {
     recentEvents: [],
     gameOverResult: null,
     fireShot: vi.fn(),
+    rematchStatus: 'idle',
+    rematchCancelReason: null,
+    acceptRematch: vi.fn(),
+    declineRematch: vi.fn(),
   })
 
   it('renders nothing when no deadline is set', () => {

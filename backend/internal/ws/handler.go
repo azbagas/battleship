@@ -244,6 +244,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err := h.lobby.FireShot(player.ID, firePayload.Cell); err != nil {
 				h.handleLobbyError(sender, player.ID, inbound.Type, err)
 			}
+		case TypeRematchAccept:
+			if err := h.lobby.AcceptRematch(player.ID); err != nil {
+				h.handleLobbyError(sender, player.ID, inbound.Type, err)
+			}
+		case TypeRematchDecline:
+			if err := h.lobby.DeclineRematch(player.ID); err != nil {
+				h.handleLobbyError(sender, player.ID, inbound.Type, err)
+			}
 		default:
 			slog.Debug("unhandled message type", "playerId", player.ID, "type", inbound.Type)
 		}
@@ -282,6 +290,12 @@ func (h *Handler) handleLobbyError(sender *wsSender, playerID string, action Mes
 		code = ErrCodeNotYourTurn
 	case errors.Is(err, lobby.ErrGameOver):
 		code = ErrCodeGameOver
+	case errors.Is(err, lobby.ErrNotInFinished):
+		code = ErrCodeNotInFinished
+	case errors.Is(err, lobby.ErrRematchNotAllowed):
+		code = ErrCodeRematchNotAllowed
+	case errors.Is(err, lobby.ErrOpponentNotPresent):
+		code = ErrCodeOpponentNotPresent
 	case errors.Is(err, game.ErrCellAlreadyTargeted):
 		code = ErrCodeCellAlreadyTargeted
 	case errors.Is(err, game.ErrCellOutOfBounds):

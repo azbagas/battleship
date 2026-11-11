@@ -20,6 +20,9 @@ backend/cmd/server/server
 
 # SQLite
 *.db
+*.db-wal
+*.db-shm
+*.db*
 *.sqlite
 *.sqlite3
 

@@ -75,6 +75,10 @@ describe('PlacementScreen', () => {
     serverRestartNotice: null,
     clearServerRestartNotice: vi.fn(),
     forfeitGame: vi.fn(),
+    rematchStatus: 'idle',
+    rematchCancelReason: null,
+    acceptRematch: vi.fn(),
+    declineRematch: vi.fn(),
     ...overrides,
   })
 

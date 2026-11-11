@@ -1355,3 +1355,123 @@ func TestHandler_ReconnectInPlacementRestoresState(t *testing.T) {
 
 	_ = playerHost
 }
+
+func mustWriteJSON(t *testing.T, ctx context.Context, conn *websocket.Conn, msg OutboundMessage) {
+	t.Helper()
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal message failed: %v", err)
+	}
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+		t.Fatalf("write message failed: %v", err)
+	}
+}
+
+func drainUntilType(t *testing.T, ctx context.Context, conn *websocket.Conn, target MessageType) (MessageType, json.RawMessage) {
+	t.Helper()
+	for {
+		typ, payload := readEnvelope(t, ctx, conn)
+		if typ == target {
+			return typ, payload
+		}
+	}
+}
+
+func TestHandler_RematchFlow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	server, _, mgr := setupTestServer(t)
+
+	connHost, playerHost, _ := connectAndHandshake(t, ctx, server.URL, "HostRematch", "")
+	defer func() {
+		_ = connHost.Close(websocket.StatusNormalClosure, "done")
+	}()
+
+	connGuest, playerGuest, _ := connectAndHandshake(t, ctx, server.URL, "GuestRematch", "")
+	defer func() {
+		_ = connGuest.Close(websocket.StatusNormalClosure, "done")
+	}()
+
+	// Host creates room
+	mustWriteJSON(t, ctx, connHost, OutboundMessage{
+		Type:    TypeLobbyCreate,
+		Payload: map[string]any{},
+	})
+
+	var roomStateHost lobby.RoomStateView
+	for {
+		tMsg, payload := readEnvelope(t, ctx, connHost)
+		if tMsg == TypeRoomState {
+			if err := json.Unmarshal(payload, &roomStateHost); err != nil {
+				t.Fatalf("unmarshal room.state: %v", err)
+			}
+			break
+		}
+	}
+	roomID := roomStateHost.RoomID
+
+	// Guest joins
+	mustWriteJSON(t, ctx, connGuest, OutboundMessage{
+		Type:    TypeLobbyJoin,
+		Payload: LobbyJoinPayload{RoomID: roomID},
+	})
+	_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+
+	// Both ready up
+	mustWriteJSON(t, ctx, connHost, OutboundMessage{Type: TypeRoomReady, Payload: map[string]any{}})
+	mustWriteJSON(t, ctx, connGuest, OutboundMessage{Type: TypeRoomReady, Payload: map[string]any{}})
+
+	// Drain into placement
+	_, _ = drainUntilType(t, ctx, connHost, TypeRoomState)
+	_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+
+	// Simulate match finish via manager directly to test WebSocket rematch flow cleanly
+	mgr.SetRoomFinishedForTesting(roomID, playerHost.PlayerID, "all_sunk")
+
+	// Host sends rematch.accept
+	mustWriteJSON(t, ctx, connHost, OutboundMessage{
+		Type:    TypeRematchAccept,
+		Payload: map[string]any{},
+	})
+
+	// Guest receives rematch.offered
+	tMsg, pBytes := drainUntilType(t, ctx, connGuest, TypeRematchOffered)
+	if tMsg != TypeRematchOffered {
+		t.Fatalf("expected guest to receive rematch.offered, got %s", tMsg)
+	}
+	var offered RematchOfferedPayload
+	if err := json.Unmarshal(pBytes, &offered); err != nil {
+		t.Fatalf("unmarshal rematch.offered: %v", err)
+	}
+	if offered.By != playerHost.PlayerID {
+		t.Errorf("expected offer by host %s, got %s", playerHost.PlayerID, offered.By)
+	}
+
+	// Guest also sends rematch.accept -> mutual rematch restarts into placement
+	mustWriteJSON(t, ctx, connGuest, OutboundMessage{
+		Type:    TypeRematchAccept,
+		Payload: map[string]any{},
+	})
+
+	// Both should receive room.state with phase placement
+	_, pHostState := drainUntilType(t, ctx, connHost, TypeRoomState)
+	var newHostView lobby.RoomStateView
+	if err := json.Unmarshal(pHostState, &newHostView); err != nil {
+		t.Fatalf("unmarshal host room.state: %v", err)
+	}
+	if newHostView.Phase != lobby.PhasePlacement {
+		t.Errorf("expected host view phase placement on rematch, got %v", newHostView.Phase)
+	}
+
+	_, pGuestState := drainUntilType(t, ctx, connGuest, TypeRoomState)
+	var newGuestView lobby.RoomStateView
+	if err := json.Unmarshal(pGuestState, &newGuestView); err != nil {
+		t.Fatalf("unmarshal guest room.state: %v", err)
+	}
+	if newGuestView.Phase != lobby.PhasePlacement {
+		t.Errorf("expected guest view phase placement on rematch, got %v", newGuestView.Phase)
+	}
+
+	_ = playerGuest
+}

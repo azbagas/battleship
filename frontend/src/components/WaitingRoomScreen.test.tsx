@@ -53,6 +53,10 @@ describe('WaitingRoomScreen', () => {
     recentEvents: [],
     gameOverResult: null,
     fireShot: vi.fn(),
+    rematchStatus: 'idle',
+    rematchCancelReason: null,
+    acceptRematch: vi.fn(),
+    declineRematch: vi.fn(),
   }
 
   const defaultMockSession: SessionContextValue = {

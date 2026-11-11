@@ -1,12 +1,42 @@
 package lobby
 
 import (
+	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/azbagas/battleship/backend/internal/game"
+	"github.com/azbagas/battleship/backend/internal/store"
 )
+
+type testMockStore struct {
+	mu    sync.Mutex
+	saved []*store.GameRecord
+}
+
+func (m *testMockStore) SaveGame(ctx context.Context, record *store.GameRecord) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.saved = append(m.saved, record)
+	return nil
+}
+
+func (m *testMockStore) GetGame(ctx context.Context, id string) (*store.GameRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.saved {
+		if s.ID == id {
+			return s, nil
+		}
+	}
+	return nil, errors.New("not found")
+}
+
+func (m *testMockStore) Close() error {
+	return nil
+}
 
 func (s *mockSender) reset() {
 	s.mu.Lock()
@@ -310,5 +340,74 @@ func TestBattle_PlacementTimeoutStartsBattle(t *testing.T) {
 	err := mgr.FireShot(firstShooter, game.Coord{X: 0, Y: 0})
 	if err != nil {
 		t.Fatalf("first shooter fire failed in auto-started battle: %v", err)
+	}
+}
+
+func TestBattle_GameStorePersistence(t *testing.T) {
+	reg := NewSessionRegistry()
+	pHost, _ := reg.CreatePlayer("Fleet Admiral")
+	pGuest, _ := reg.CreatePlayer("General Officer")
+
+	mockSt := &testMockStore{}
+	clock := NewMockClock(time.Now())
+	mgr := NewLobbyManager(reg, WithClock(clock), WithStore(mockSt))
+
+	sHost := &mockSender{}
+	sGuest := &mockSender{}
+	mgr.RegisterConnection(pHost.ID, sHost)
+	mgr.RegisterConnection(pGuest.ID, sGuest)
+
+	room, err := mgr.CreateRoom(pHost.ID)
+	if err != nil {
+		t.Fatalf("CreateRoom failed: %v", err)
+	}
+	if _, err := mgr.JoinRoom(pGuest.ID, room.ID); err != nil {
+		t.Fatalf("JoinRoom failed: %v", err)
+	}
+	if err := mgr.ReadyRoom(pHost.ID); err != nil {
+		t.Fatalf("ReadyRoom host failed: %v", err)
+	}
+	if err := mgr.ReadyRoom(pGuest.ID); err != nil {
+		t.Fatalf("ReadyRoom guest failed: %v", err)
+	}
+
+	// Submit placements
+	if err := mgr.SubmitFleet(pHost.ID, validFleetForTest()); err != nil {
+		t.Fatalf("SubmitFleet host failed: %v", err)
+	}
+	if err := mgr.SubmitFleet(pGuest.ID, validGuestFleetForTest()); err != nil {
+		t.Fatalf("SubmitFleet guest failed: %v", err)
+	}
+
+	// Forfeit via leaveMatchLocked
+	if err := mgr.LeaveRoom(pHost.ID); err != nil {
+		t.Fatalf("LeaveRoom forfeit failed: %v", err)
+	}
+
+	// Allow goroutine to execute persistence
+	time.Sleep(50 * time.Millisecond)
+
+	mockSt.mu.Lock()
+	savedCount := len(mockSt.saved)
+	var rec *store.GameRecord
+	if savedCount > 0 {
+		rec = mockSt.saved[0]
+	}
+	mockSt.mu.Unlock()
+
+	if savedCount != 1 {
+		t.Fatalf("expected 1 saved record on forfeit, got %d", savedCount)
+	}
+	if rec.EndReason != "forfeit" {
+		t.Errorf("expected reason 'forfeit', got %q", rec.EndReason)
+	}
+	if rec.WinnerSlot == nil || *rec.WinnerSlot != 2 {
+		t.Errorf("expected WinnerSlot 2 for guest on host forfeit, got %v", rec.WinnerSlot)
+	}
+	if rec.Player1Name != "Fleet Admiral" {
+		t.Errorf("expected Player1Name 'Fleet Admiral', got %q", rec.Player1Name)
+	}
+	if rec.Player2Name != "General Officer" {
+		t.Errorf("expected Player2Name 'General Officer', got %q", rec.Player2Name)
 	}
 }
