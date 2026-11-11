@@ -69,6 +69,10 @@ describe('ReadyUpScreen', () => {
     recentEvents: [],
     gameOverResult: null,
     fireShot: vi.fn(),
+    opponentDisconnectDeadline: null,
+    serverRestartNotice: null,
+    clearServerRestartNotice: vi.fn(),
+    forfeitGame: vi.fn(),
     ...overrides,
   })
 
@@ -151,5 +155,14 @@ describe('ReadyUpScreen', () => {
 
     expect(screen.getByText('Leaving sector...')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Ready for Battle/i })).toBeDisabled()
+  })
+
+  it('renders opponent disconnect banner when opponent disconnect deadline is present', () => {
+    const deadline = new Date(Date.now() + 45000).toISOString()
+    const lobby = createMockLobby({ opponentDisconnectDeadline: deadline })
+    renderComponent(lobby)
+
+    expect(screen.getByText(/CONNECTION DROPPED/i)).toBeInTheDocument()
+    expect(screen.getByText(/Commander Spock is offline/i)).toBeInTheDocument()
   })
 })

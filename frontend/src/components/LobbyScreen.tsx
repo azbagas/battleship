@@ -119,6 +119,8 @@ export const LobbyScreen: React.FC = () => {
     joiningRoomId,
     lobbyError,
     clearLobbyError,
+    serverRestartNotice,
+    clearServerRestartNotice,
   } = useLobby()
 
   const { player, connectionStatus, isSessionConflict, logout } = useSession()
@@ -169,6 +171,31 @@ export const LobbyScreen: React.FC = () => {
             <ConnectionBadge status={connectionStatus} isConflict={isSessionConflict} />
           </div>
         </div>
+
+        {/* Server Restart / Lost Game Notice */}
+        {serverRestartNotice && (
+          <div
+            role="alert"
+            data-testid="server-restart-notice"
+            className="mb-6 p-4 rounded-xl bg-amber-500/10 border border-amber-500/40 text-amber-200 text-xs flex items-start justify-between gap-3 shadow-lg shadow-amber-950/20"
+          >
+            <div className="flex items-start gap-2.5">
+              <span className="text-amber-400 font-bold text-sm shrink-0 mt-0.5">⚠️</span>
+              <div className="space-y-1">
+                <span className="font-semibold text-amber-300 block">Previous Match Terminated</span>
+                <span>{serverRestartNotice}</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={clearServerRestartNotice}
+              aria-label="Dismiss server restart notification"
+              className="text-amber-400 hover:text-amber-200 p-1 text-sm shrink-0 transition cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* Room Capacity Status */}
         <div className="mb-6 p-4 rounded-xl bg-slate-950/60 border border-slate-800/80">

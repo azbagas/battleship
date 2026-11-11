@@ -19,30 +19,32 @@ const (
 
 // Room represents an in-memory game room.
 type Room struct {
-	ID                   string
-	HostPlayerID         string
-	GuestPlayerID        string
-	Phase                RoomPhase
-	HostReady            bool
-	GuestReady           bool
-	CreatedAt            time.Time
-	DisconnectTimer      Timer
-	HostDisconnectTimer  Timer
-	GuestDisconnectTimer Timer
-	PlacementDeadline    time.Time
-	PlacementTimer       Timer
-	HostFleet            []game.PlacedShip
-	GuestFleet           []game.PlacedShip
-	HostFleetConfirmed   bool
-	GuestFleetConfirmed  bool
-	HostBoard            *game.Board
-	GuestBoard           *game.Board
-	TurnPlayerID         string
-	TurnDeadline         time.Time
-	TurnTimer            Timer
-	ShotLog              []ShotRecord
-	WinnerPlayerID       string
-	EndReason            string
+	ID                      string
+	HostPlayerID            string
+	GuestPlayerID           string
+	Phase                   RoomPhase
+	HostReady               bool
+	GuestReady              bool
+	CreatedAt               time.Time
+	DisconnectTimer         Timer
+	HostDisconnectTimer     Timer
+	GuestDisconnectTimer    Timer
+	HostDisconnectDeadline  time.Time
+	GuestDisconnectDeadline time.Time
+	PlacementDeadline       time.Time
+	PlacementTimer          Timer
+	HostFleet               []game.PlacedShip
+	GuestFleet              []game.PlacedShip
+	HostFleetConfirmed      bool
+	GuestFleetConfirmed     bool
+	HostBoard               *game.Board
+	GuestBoard              *game.Board
+	TurnPlayerID            string
+	TurnDeadline            time.Time
+	TurnTimer               Timer
+	ShotLog                 []ShotRecord
+	WinnerPlayerID          string
+	EndReason               string
 }
 
 // ShotRecord logs an individual shot fired during battle.
@@ -77,25 +79,27 @@ type RoomReadyStateView struct {
 
 // RoomStateView is sent to players upon entering or updating a room.
 type RoomStateView struct {
-	RoomID            string                 `json:"roomId"`
-	Phase             RoomPhase              `json:"phase"`
-	Role              string                 `json:"role"` // "host" or "guest"
-	OpponentName      string                 `json:"opponentName,omitempty"`
-	Host              RoomPlayerView         `json:"host"`
-	Guest             *RoomPlayerView        `json:"guest,omitempty"`
-	HostReady         bool                   `json:"hostReady"`
-	GuestReady        bool                   `json:"guestReady"`
-	CreatedAt         time.Time              `json:"createdAt"`
-	PlacementDeadline *time.Time             `json:"placementDeadline,omitempty"`
-	FleetConfirmed    bool                   `json:"fleetConfirmed"`
-	OpponentConfirmed bool                   `json:"opponentConfirmed"`
-	OwnFleet          []game.PlacedShip      `json:"ownFleet,omitempty"`
-	TurnPlayerID      string                 `json:"turnPlayerId,omitempty"`
-	TurnDeadline      *time.Time             `json:"turnDeadline,omitempty"`
-	BattleView        *game.PlayerBattleView `json:"battleView,omitempty"`
-	ShotLog           []ShotRecord           `json:"shotLog,omitempty"`
-	WinnerPlayerID    string                 `json:"winnerPlayerId,omitempty"`
-	EndReason         string                 `json:"endReason,omitempty"`
+	RoomID                 string                 `json:"roomId"`
+	Phase                  RoomPhase              `json:"phase"`
+	Role                   string                 `json:"role"` // "host" or "guest"
+	OpponentName           string                 `json:"opponentName,omitempty"`
+	Host                   RoomPlayerView         `json:"host"`
+	Guest                  *RoomPlayerView        `json:"guest,omitempty"`
+	HostReady              bool                   `json:"hostReady"`
+	GuestReady             bool                   `json:"guestReady"`
+	CreatedAt              time.Time              `json:"createdAt"`
+	PlacementDeadline      *time.Time             `json:"placementDeadline,omitempty"`
+	FleetConfirmed         bool                   `json:"fleetConfirmed"`
+	OpponentConfirmed      bool                   `json:"opponentConfirmed"`
+	OwnFleet               []game.PlacedShip      `json:"ownFleet,omitempty"`
+	TurnPlayerID           string                 `json:"turnPlayerId,omitempty"`
+	TurnDeadline           *time.Time             `json:"turnDeadline,omitempty"`
+	BattleView             *game.PlayerBattleView `json:"battleView,omitempty"`
+	ShotLog                []ShotRecord           `json:"shotLog,omitempty"`
+	WinnerPlayerID         string                 `json:"winnerPlayerId,omitempty"`
+	EndReason              string                 `json:"endReason,omitempty"`
+	OpponentDisconnected   bool                   `json:"opponentDisconnected,omitempty"`
+	OpponentGraceDeadline  *time.Time             `json:"opponentGraceDeadline,omitempty"`
 }
 
 // LobbySnapshotPayload represents the full list of waiting rooms sent on entry.

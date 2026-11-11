@@ -324,7 +324,7 @@ func TestWaitingRoomHostDisconnect_ReconnectCancelsGracePeriod(t *testing.T) {
 	newHostSender := &mockSender{}
 	mgr.RegisterConnection(host.ID, newHostSender)
 	reconnectedRoom, err := mgr.HandleReconnect(host.ID)
-	if err != nil || reconnectedRoom.ID != room.ID {
+	if err != nil || reconnectedRoom.RoomID != room.ID {
 		t.Fatalf("reconnect handle failed: %v, room: %+v", err, reconnectedRoom)
 	}
 

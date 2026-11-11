@@ -2,9 +2,18 @@ import React from 'react'
 import { useLobby } from '../context/LobbyContext'
 import { useSession } from '../context/SessionContext'
 import { ConnectionBadge } from './ConnectionBadge'
+import { OpponentDisconnectBanner } from './OpponentDisconnectBanner'
 
 export const ReadyUpScreen: React.FC = () => {
-  const { activeRoom, readyState, isTogglingReady, isLeavingRoom, toggleReady, leaveRoom } = useLobby()
+  const {
+    activeRoom,
+    readyState,
+    isTogglingReady,
+    isLeavingRoom,
+    opponentDisconnectDeadline,
+    toggleReady,
+    leaveRoom,
+  } = useLobby()
   const { connectionStatus, isSessionConflict } = useSession()
 
   const hostName = activeRoom?.host?.name || 'Host Commander'
@@ -38,6 +47,24 @@ export const ReadyUpScreen: React.FC = () => {
 
   return (
     <div className="w-full max-w-lg mx-auto">
+      {/* Self Reconnecting Notice Banner */}
+      {(connectionStatus === 'connecting' || connectionStatus === 'disconnected') && (
+        <div
+          role="status"
+          className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono flex items-center gap-2"
+        >
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+          <span>Connection lost. Attempting to restore link...</span>
+        </div>
+      )}
+
+      {/* Opponent Disconnect Grace Countdown Banner */}
+      {opponentDisconnectDeadline && (
+        <div className="mb-4">
+          <OpponentDisconnectBanner opponentName={opponentName} />
+        </div>
+      )}
+
       <div className="bg-slate-900/90 backdrop-blur-md rounded-2xl p-6 md:p-8 shadow-2xl border border-slate-800 text-slate-100">
         {/* Header Bar */}
         <div className="flex items-center justify-between pb-6 border-b border-slate-800/80 mb-6">

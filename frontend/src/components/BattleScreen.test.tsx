@@ -80,6 +80,10 @@ describe('BattleScreen', () => {
     recentEvents: [],
     gameOverResult: null,
     fireShot: vi.fn(),
+    opponentDisconnectDeadline: null,
+    serverRestartNotice: null,
+    clearServerRestartNotice: vi.fn(),
+    forfeitGame: vi.fn(),
     ...overrides,
   })
 
@@ -300,21 +304,30 @@ describe('BattleScreen', () => {
     expect(screen.getByText('All friendly naval forces have been destroyed.')).toBeDefined()
   })
 
-  it('allows commander to surrender via surrender confirmation modal', () => {
-    const leaveRoomMock = vi.fn()
-    const lobby = createMockLobby({ leaveRoom: leaveRoomMock })
+  it('allows commander to leave/forfeit via leave confirmation modal', () => {
+    const forfeitGameMock = vi.fn()
+    const lobby = createMockLobby({ forfeitGame: forfeitGameMock })
     renderComponent(lobby)
 
-    const surrenderLink = screen.getByRole('button', { name: /Surrender/i })
-    fireEvent.click(surrenderLink)
+    const leaveLink = screen.getByRole('button', { name: /Leave Game/i })
+    fireEvent.click(leaveLink)
 
-    expect(screen.getByText(/Surrender Engagement\?/i)).toBeDefined()
-    expect(screen.getByText(/Conceding will forfeit the match immediately/i)).toBeDefined()
+    expect(screen.getByText(/Leave Game \/ Forfeit Match\?/i)).toBeDefined()
+    expect(screen.getByText(/Leaving will forfeit the match immediately/i)).toBeDefined()
 
     const confirmBtn = screen.getByRole('button', { name: /Confirm Forfeit/i })
     fireEvent.click(confirmBtn)
 
-    expect(leaveRoomMock).toHaveBeenCalledTimes(1)
+    expect(forfeitGameMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders opponent disconnect banner when opponentDisconnectDeadline is active', () => {
+    const deadline = new Date(Date.now() + 45000).toISOString()
+    const lobby = createMockLobby({ opponentDisconnectDeadline: deadline })
+    renderComponent(lobby)
+
+    expect(screen.getByText(/CONNECTION DROPPED/i)).toBeDefined()
+    expect(screen.getByText(/Captain Bravo is offline/i)).toBeDefined()
   })
 })
 

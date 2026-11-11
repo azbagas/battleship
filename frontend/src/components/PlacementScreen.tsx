@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useLobby } from '../context/LobbyContext'
 import { useSession } from '../context/SessionContext'
 import { ConnectionBadge } from './ConnectionBadge'
+import { OpponentDisconnectBanner } from './OpponentDisconnectBanner'
 import { Coord, Orientation, PlacedShip, ShipType } from '../types/protocol'
 import {
   COLUMN_LABELS,
@@ -24,10 +25,16 @@ export const PlacementScreen: React.FC = () => {
     ownFleet,
     placementDeadline,
     submitFleet,
+    forfeitGame,
+    isLeavingRoom,
+    opponentDisconnectDeadline,
     lobbyError,
     clearLobbyError,
   } = useLobby()
   const { connectionStatus, isSessionConflict } = useSession()
+
+  // Leave game confirmation modal state
+  const [showLeaveModal, setShowLeaveModal] = useState<boolean>(false)
 
   // Local fleet placements state
   const [ships, setShips] = useState<PlacedShip[]>([])
@@ -268,6 +275,22 @@ export const PlacementScreen: React.FC = () => {
 
   return (
     <div className="w-full max-w-5xl mx-auto px-2 sm:px-4 py-4 space-y-4">
+      {/* Self Reconnecting Notice Banner */}
+      {(connectionStatus === 'connecting' || connectionStatus === 'disconnected') && (
+        <div
+          role="status"
+          className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono flex items-center gap-2"
+        >
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+          <span>Connection lost. Attempting to restore link to sector... Play will resume once reconnected.</span>
+        </div>
+      )}
+
+      {/* Opponent Disconnect Grace Countdown Banner */}
+      {opponentDisconnectDeadline && (
+        <OpponentDisconnectBanner opponentName={opponentName} />
+      )}
+
       {/* Top Header Card */}
       <div className="bg-slate-900/90 backdrop-blur-md rounded-2xl p-4 sm:p-6 shadow-2xl border border-slate-800 text-slate-100">
         <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-800/80">
@@ -300,7 +323,16 @@ export const PlacementScreen: React.FC = () => {
               <p className="text-xs text-slate-400">Tactical Deployment Phase</p>
             </div>
           </div>
-          <ConnectionBadge status={connectionStatus} isConflict={isSessionConflict} />
+          <div className="flex items-center gap-3">
+            <ConnectionBadge status={connectionStatus} isConflict={isSessionConflict} />
+            <button
+              type="button"
+              onClick={() => setShowLeaveModal(true)}
+              className="text-xs font-mono text-rose-400 hover:text-rose-300 underline underline-offset-4 transition-colors"
+            >
+              Leave Game
+            </button>
+          </div>
         </div>
 
         {/* Command Status Banner */}
@@ -707,6 +739,49 @@ export const PlacementScreen: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Leave Game Confirmation Modal */}
+      {showLeaveModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="leave-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+        >
+          <div className="w-full max-w-md p-6 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl text-center space-y-4">
+            <div className="w-12 h-12 mx-auto rounded-full bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 text-xl font-bold">
+              ⚠️
+            </div>
+            <h3 id="leave-title" className="text-lg font-mono font-bold uppercase text-rose-300">
+              Leave Game / Forfeit Match?
+            </h3>
+            <p className="text-xs text-slate-300 font-mono">
+              Leaving during fleet deployment forfeits the match immediately and awards victory to{' '}
+              <strong className="text-white">{opponentName}</strong>. This cannot be undone.
+            </p>
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowLeaveModal(false)}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono font-bold transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isLeavingRoom}
+                onClick={() => {
+                  setShowLeaveModal(false)
+                  forfeitGame()
+                }}
+                className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-mono font-bold transition-all disabled:opacity-50"
+              >
+                {isLeavingRoom ? 'Forfeiting...' : 'Confirm Forfeit'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

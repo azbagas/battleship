@@ -397,5 +397,124 @@ describe('LobbyProvider', () => {
     })
     expect(result.current.isOpponentConfirmed).toBe(true)
   })
+
+  it('handles opponent.disconnected and opponent.reconnected events', () => {
+    const { result } = renderHook(() => useLobby(), { wrapper })
+
+    const roomStateHandler = messageHandlers.get('room.state')
+    const oppDisconnectHandler = messageHandlers.get('opponent.disconnected')
+    const oppReconnectHandler = messageHandlers.get('opponent.reconnected')
+
+    expect(oppDisconnectHandler).toBeDefined()
+    expect(oppReconnectHandler).toBeDefined()
+
+    // Enter battle room
+    act(() => {
+      roomStateHandler!({
+        roomId: 'r_battle1',
+        phase: 'battle',
+        role: 'host',
+        host: { id: 'p1', name: 'Admiral Nimitz' },
+        guest: { id: 'p2', name: 'Commander Spock' },
+        opponentName: 'Commander Spock',
+        turnPlayerId: 'p1',
+        turnDeadline: '2026-11-10T12:00:30Z',
+        createdAt: '2026-11-10T12:00:00Z',
+      })
+    })
+
+    expect(result.current.opponentDisconnectDeadline).toBeNull()
+
+    // Opponent disconnects
+    const graceDeadline = '2026-11-10T12:01:00Z'
+    act(() => {
+      oppDisconnectHandler!({
+        roomId: 'r_battle1',
+        playerId: 'p2',
+        graceDeadline,
+      })
+    })
+
+    expect(result.current.opponentDisconnectDeadline).toBe(graceDeadline)
+
+    // Opponent reconnects
+    act(() => {
+      oppReconnectHandler!({
+        roomId: 'r_battle1',
+        playerId: 'p2',
+      })
+    })
+
+    expect(result.current.opponentDisconnectDeadline).toBeNull()
+  })
+
+  it('forfeitGame sends game.leave message and resets leaving state on error', () => {
+    const { result } = renderHook(() => useLobby(), { wrapper })
+
+    act(() => {
+      result.current.forfeitGame()
+    })
+
+    expect(mockClient.send).toHaveBeenCalledWith('game.leave', {})
+    expect(result.current.isLeavingRoom).toBe(true)
+
+    // On error, isLeavingRoom should reset
+    act(() => {
+      errorHandlers.forEach((h) =>
+        h({
+          code: ErrorCode.InvalidState,
+          message: 'Cannot forfeit',
+        }),
+      )
+    })
+
+    expect(result.current.isLeavingRoom).toBe(false)
+  })
+
+  it('sets serverRestartNotice when reconnecting and server returns restoredState: null after active game', () => {
+    const { result } = renderHook(() => useLobby(), { wrapper })
+
+    const roomStateHandler = messageHandlers.get('room.state')
+
+    // Player was in an active room
+    act(() => {
+      roomStateHandler!({
+        roomId: 'r_active1',
+        phase: 'battle',
+        role: 'host',
+        host: { id: 'p1', name: 'Admiral Nimitz' },
+        guest: { id: 'p2', name: 'Commander Spock' },
+        opponentName: 'Commander Spock',
+        turnPlayerId: 'p1',
+        createdAt: '2026-11-10T12:00:00Z',
+      })
+    })
+
+    expect(result.current.activeRoom).not.toBeNull()
+
+    // Server restarted: hello.ok arrives with restoredState: null
+    act(() => {
+      helloOKHandlers.forEach((h) =>
+        h({
+          playerId: 'p1',
+          displayName: 'Admiral Nimitz',
+          sessionToken: 'tok1',
+          restoredState: null,
+        }),
+      )
+    })
+
+    expect(result.current.activeRoom).toBeNull()
+    expect(result.current.serverRestartNotice).toContain(
+      'Your in-progress game was lost because the server restarted.',
+    )
+
+    // User dismisses notification
+    act(() => {
+      result.current.clearServerRestartNotice()
+    })
+
+    expect(result.current.serverRestartNotice).toBeNull()
+  })
 })
 

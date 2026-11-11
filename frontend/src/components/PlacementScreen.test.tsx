@@ -71,6 +71,10 @@ describe('PlacementScreen', () => {
     recentEvents: [],
     gameOverResult: null,
     fireShot: vi.fn(),
+    opponentDisconnectDeadline: null,
+    serverRestartNotice: null,
+    clearServerRestartNotice: vi.fn(),
+    forfeitGame: vi.fn(),
     ...overrides,
   })
 
@@ -189,5 +193,31 @@ describe('PlacementScreen', () => {
 
     const randomizeBtn = screen.getByRole('button', { name: /Randomize/i })
     expect(randomizeBtn.hasAttribute('disabled')).toBe(true)
+  })
+
+  it('allows player to forfeit match via Leave Game confirmation modal', () => {
+    const forfeitGameMock = vi.fn()
+    const lobby = createMockLobby({ forfeitGame: forfeitGameMock })
+    renderComponent(lobby)
+
+    const leaveBtn = screen.getByRole('button', { name: /Leave Game/i })
+    fireEvent.click(leaveBtn)
+
+    expect(screen.getByText(/Leave Game \/ Forfeit Match\?/i)).toBeDefined()
+    expect(screen.getByText(/Leaving during fleet deployment forfeits the match/i)).toBeDefined()
+
+    const confirmBtn = screen.getByRole('button', { name: /Confirm Forfeit/i })
+    fireEvent.click(confirmBtn)
+
+    expect(forfeitGameMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders opponent disconnect banner when opponent has disconnected', () => {
+    const deadline = new Date(Date.now() + 50000).toISOString()
+    const lobby = createMockLobby({ opponentDisconnectDeadline: deadline })
+    renderComponent(lobby)
+
+    expect(screen.getByText(/CONNECTION DROPPED/i)).toBeDefined()
+    expect(screen.getByText(/Captain Bravo is offline/i)).toBeDefined()
   })
 })

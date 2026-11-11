@@ -55,6 +55,12 @@ export interface LobbyContextValue {
   recentEvents: BattleShotResultPayload[]
   gameOverResult: GameOverPayload | null
   fireShot: (cell: Coord) => void
+
+  // Disconnect, Reconnect & Forfeit controls
+  opponentDisconnectDeadline: string | null
+  serverRestartNotice: string | null
+  clearServerRestartNotice: () => void
+  forfeitGame: () => void
 }
 
 export const LobbyContext = createContext<LobbyContextValue | undefined>(undefined)

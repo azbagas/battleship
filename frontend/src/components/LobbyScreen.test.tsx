@@ -33,6 +33,10 @@ describe('LobbyScreen', () => {
     submitFleet: vi.fn(),
     turnPlayerId: null,
     turnDeadline: null,
+    opponentDisconnectDeadline: null,
+    serverRestartNotice: null,
+    clearServerRestartNotice: vi.fn(),
+    forfeitGame: vi.fn(),
     isMyTurn: false,
     targetShots: new Map(),
     ownShots: new Map(),
@@ -152,5 +156,26 @@ describe('LobbyScreen', () => {
     fireEvent.click(dismissBtn)
 
     expect(clearLobbyError).toHaveBeenCalled()
+  })
+
+  it('renders and dismisses server restart lost game notice', () => {
+    const clearServerRestartNotice = vi.fn()
+    renderComponent({
+      serverRestartNotice:
+        'Your previous match was terminated due to a server restart. Returned to lobby.',
+      clearServerRestartNotice,
+    })
+
+    expect(screen.getByTestId('server-restart-notice')).toBeInTheDocument()
+    expect(
+      screen.getByText(/Your previous match was terminated due to a server restart/i),
+    ).toBeInTheDocument()
+
+    const dismissBtn = screen.getByRole('button', {
+      name: /dismiss server restart notification/i,
+    })
+    fireEvent.click(dismissBtn)
+
+    expect(clearServerRestartNotice).toHaveBeenCalledTimes(1)
   })
 })

@@ -33,18 +33,37 @@ func (s *wsSender) Send(msgType string, payload any) error {
 	})
 }
 
+// HandlerOption configures Handler instances.
+type HandlerOption func(*Handler)
+
+// WithPingConfig sets custom ping interval and timeout for heartbeats.
+func WithPingConfig(interval, timeout time.Duration) HandlerOption {
+	return func(h *Handler) {
+		h.pingInterval = interval
+		h.pingTimeout = timeout
+	}
+}
+
 // Handler manages WebSocket upgrades, handshake, and message dispatch.
 type Handler struct {
-	registry *lobby.SessionRegistry
-	lobby    *lobby.LobbyManager
+	registry     *lobby.SessionRegistry
+	lobby        *lobby.LobbyManager
+	pingInterval time.Duration
+	pingTimeout  time.Duration
 }
 
 // NewHandler constructs a WebSocket Handler backed by SessionRegistry and LobbyManager.
-func NewHandler(registry *lobby.SessionRegistry, lobbyMgr *lobby.LobbyManager) *Handler {
-	return &Handler{
-		registry: registry,
-		lobby:    lobbyMgr,
+func NewHandler(registry *lobby.SessionRegistry, lobbyMgr *lobby.LobbyManager, opts ...HandlerOption) *Handler {
+	h := &Handler{
+		registry:     registry,
+		lobby:        lobbyMgr,
+		pingInterval: 15 * time.Second,
+		pingTimeout:  5 * time.Second,
 	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // writeJSON serializes v as a JSON text frame and writes it to the WebSocket connection.
@@ -91,8 +110,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Register connection sender with lobby manager.
-	h.lobby.RegisterConnection(player.ID, sender)
+	sessionCtx, cancelSession := context.WithCancel(r.Context())
+	defer cancelSession()
+
+	if h.pingInterval > 0 {
+		go h.heartbeatLoop(sessionCtx, conn, player.ID)
+	}
 
 	// Detach connection and clean up lobby state when this connection terminates.
 	defer func() {
@@ -107,8 +130,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	currentRoomID, _ := h.registry.GetPlayerRoom(player.ID)
 	var restoredState any
 	if currentRoomID != "" {
-		if room, _ := h.lobby.HandleReconnect(player.ID); room != nil {
-			restoredState = room
+		if roomState, _ := h.lobby.HandleReconnect(player.ID); roomState != nil {
+			restoredState = roomState
 		}
 	}
 
@@ -127,8 +150,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If player is not restored into an active room, place them in the lobby.
-	if restoredState == nil {
+	// Handshake complete: register connection sender with lobby manager.
+	h.lobby.RegisterConnection(player.ID, sender)
+
+	// If player is restored into an active room, also send room.state after hello.ok.
+	if restoredState != nil {
+		if err := sender.Send(string(TypeRoomState), restoredState); err != nil {
+			slog.Error("failed to write room.state on reconnect", "playerId", player.ID, "error", err)
+			return
+		}
+	} else {
+		// If player is not restored into an active room, place them in the lobby.
 		h.lobby.SubscribeToLobby(player.ID)
 		snapshot := h.lobby.GetLobbySnapshot()
 		if err := sender.Send(string(TypeLobbySnapshot), snapshot); err != nil {
@@ -349,4 +381,26 @@ func (h *Handler) handleHandshake(ctx context.Context, conn *websocket.Conn, sen
 	}
 
 	return player, nil
+}
+
+// heartbeatLoop periodically pings the client to detect dead connections.
+func (h *Handler) heartbeatLoop(ctx context.Context, conn *websocket.Conn, playerID string) {
+	ticker := time.NewTicker(h.pingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pingCtx, cancelPing := context.WithTimeout(ctx, h.pingTimeout)
+			err := conn.Ping(pingCtx)
+			cancelPing()
+			if err != nil {
+				slog.Debug("heartbeat ping failed, closing connection", "playerId", playerID, "error", err)
+				_ = conn.Close(websocket.StatusPolicyViolation, "ping timeout")
+				return
+			}
+		}
+	}
 }

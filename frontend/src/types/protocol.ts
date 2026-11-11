@@ -23,6 +23,8 @@ export type MessageType =
   | 'battle.shotResult'
   | 'battle.turn'
   | 'game.over'
+  | 'opponent.disconnected'
+  | 'opponent.reconnected'
   | string
 
 export interface InboundMessage<T = unknown> {
@@ -162,6 +164,12 @@ export interface GameOverPayload {
   totalShots: number
 }
 
+export interface OpponentDisconnectedPayload {
+  graceDeadline: string
+}
+
+export type OpponentReconnectedPayload = Record<string, never>
+
 export interface RoomStatePayload {
   roomId: string
   phase: RoomPhase
@@ -181,6 +189,8 @@ export interface RoomStatePayload {
   battleView?: PlayerBattleView
   winnerPlayerId?: string
   endReason?: string
+  opponentDisconnected?: boolean
+  opponentGraceDeadline?: string
 }
 
 export interface RoomReadyStatePayload {
@@ -205,6 +215,7 @@ export const ErrorCode = {
   NotInPlacement: 'NOT_IN_PLACEMENT',
   FleetAlreadyLocked: 'FLEET_ALREADY_LOCKED',
   InvalidPlacement: 'INVALID_PLACEMENT',
+  InvalidState: 'INVALID_STATE',
   NotInBattle: 'NOT_IN_BATTLE',
   NotYourTurn: 'NOT_YOUR_TURN',
   CellAlreadyTargeted: 'CELL_ALREADY_TARGETED',

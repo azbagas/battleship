@@ -1132,3 +1132,226 @@ func TestWebSocket_BattleFireAndTurnLoop(t *testing.T) {
 	_, _ = readEnvelope(t, ctx, firstConn)  // room.state
 	_, _ = readEnvelope(t, ctx, secondConn) // room.state
 }
+
+func validFleet() []game.PlacedShip {
+	return []game.PlacedShip{
+		{Type: game.ShipCarrier, Origin: game.Coord{X: 0, Y: 0}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipBattleship, Origin: game.Coord{X: 0, Y: 1}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipCruiser, Origin: game.Coord{X: 0, Y: 2}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipSubmarine, Origin: game.Coord{X: 0, Y: 3}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipDestroyer, Origin: game.Coord{X: 0, Y: 4}, Orientation: game.OrientationHorizontal},
+	}
+}
+
+func TestHandler_GameLeave_ForfeitInBattle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	server, _, mgr := setupTestServer(t)
+
+	connHost, playerHost, _ := connectAndHandshake(t, ctx, server.URL, "HostPlayer", "")
+	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
+
+	createMsg, _ := json.Marshal(OutboundMessage{Type: TypeLobbyCreate, Payload: map[string]any{}})
+	_ = connHost.Write(ctx, websocket.MessageText, createMsg)
+	_, pRoomState := readEnvelope(t, ctx, connHost)
+	var roomState lobby.RoomStateView
+	_ = json.Unmarshal(pRoomState, &roomState)
+	roomID := roomState.RoomID
+
+	connGuest, playerGuest, _ := connectAndHandshake(t, ctx, server.URL, "GuestPlayer", "")
+	defer func() { _ = connGuest.Close(websocket.StatusNormalClosure, "done") }()
+
+	joinMsg, _ := json.Marshal(OutboundMessage{Type: TypeLobbyJoin, Payload: LobbyJoinPayload{RoomID: roomID}})
+	_ = connGuest.Write(ctx, websocket.MessageText, joinMsg)
+	_, _ = readEnvelope(t, ctx, connHost)  // room.state
+	_, _ = readEnvelope(t, ctx, connHost)  // room.readyState
+	_, _ = readEnvelope(t, ctx, connGuest) // room.state
+	_, _ = readEnvelope(t, ctx, connGuest) // room.readyState
+
+	// Ready up
+	readyMsg, _ := json.Marshal(OutboundMessage{Type: TypeRoomReady, Payload: map[string]any{}})
+	_ = connHost.Write(ctx, websocket.MessageText, readyMsg)
+	_, _ = readEnvelope(t, ctx, connHost)
+	_, _ = readEnvelope(t, ctx, connGuest)
+
+	_ = connGuest.Write(ctx, websocket.MessageText, readyMsg)
+	_, _ = readEnvelope(t, ctx, connHost)  // room.readyState
+	_, _ = readEnvelope(t, ctx, connGuest) // room.readyState
+	_, _ = readEnvelope(t, ctx, connHost)  // room.state (placement)
+	_, _ = readEnvelope(t, ctx, connGuest) // room.state (placement)
+
+	// Both submit fleets
+	fleet := validFleet()
+	submitMsg, _ := json.Marshal(OutboundMessage{Type: TypePlacementSubmit, Payload: PlacementSubmitPayload{Ships: fleet}})
+	_ = connHost.Write(ctx, websocket.MessageText, submitMsg)
+	_, _ = readEnvelope(t, ctx, connHost)  // placement.confirmed
+	_, _ = readEnvelope(t, ctx, connGuest) // placement.opponentReady
+
+	_ = connGuest.Write(ctx, websocket.MessageText, submitMsg)
+	_, _ = readEnvelope(t, ctx, connGuest) // placement.confirmed
+	_, _ = readEnvelope(t, ctx, connHost)  // placement.opponentReady
+
+	// Both advance to battle
+	_, _ = readEnvelope(t, ctx, connHost)  // battle.start
+	_, _ = readEnvelope(t, ctx, connGuest) // battle.start
+	_, _ = readEnvelope(t, ctx, connHost)  // battle.turn
+	_, _ = readEnvelope(t, ctx, connGuest) // battle.turn
+	_, _ = readEnvelope(t, ctx, connHost)  // room.state
+	_, _ = readEnvelope(t, ctx, connGuest) // room.state
+
+	// Guest sends game.leave (forfeits match)
+	leaveMsg, _ := json.Marshal(OutboundMessage{Type: TypeGameLeave, Payload: map[string]any{}})
+	_ = connGuest.Write(ctx, websocket.MessageText, leaveMsg)
+
+	// Guest receives lobby.snapshot
+	tGuestLeave, _ := readEnvelope(t, ctx, connGuest)
+	if tGuestLeave != TypeLobbySnapshot {
+		t.Fatalf("expected guest to receive lobby.snapshot after game.leave, got %s", tGuestLeave)
+	}
+
+	// Host receives game.over with reason forfeit
+	tHostGameOver, pHostGameOver := readEnvelope(t, ctx, connHost)
+	if tHostGameOver != TypeGameOver {
+		t.Fatalf("expected host to receive game.over, got %s", tHostGameOver)
+	}
+	var gameOver GameOverPayload
+	_ = json.Unmarshal(pHostGameOver, &gameOver)
+	if gameOver.WinnerPlayerID != playerHost.PlayerID {
+		t.Errorf("expected winner to be host (%s), got %s", playerHost.PlayerID, gameOver.WinnerPlayerID)
+	}
+	if gameOver.Reason != "forfeit" {
+		t.Errorf("expected reason forfeit, got %s", gameOver.Reason)
+	}
+
+	// Host receives updated room.state
+	tHostState, _ := readEnvelope(t, ctx, connHost)
+	if tHostState != TypeRoomState {
+		t.Fatalf("expected host to receive room.state, got %s", tHostState)
+	}
+
+	_ = playerGuest
+	_ = mgr
+}
+
+func TestHandler_HeartbeatPing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	reg := lobby.NewSessionRegistry()
+	mgr := lobby.NewLobbyManager(reg)
+	// Fast ping interval to verify heartbeat loop runs cleanly
+	handler := NewHandler(reg, mgr, WithPingConfig(50*time.Millisecond, 200*time.Millisecond))
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	conn, player, _ := connectAndHandshake(t, ctx, server.URL, "PingTester", "")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Sleep for a short while so multiple pings are exchanged
+	time.Sleep(200 * time.Millisecond)
+
+	// Connection should still be functional and connected
+	p, ok := reg.GetByToken(player.SessionToken)
+	if !ok || p.ConnectionState != lobby.StateConnected {
+		t.Fatalf("expected player to be connected, got %v", p)
+	}
+}
+
+func TestHandler_ReconnectInPlacementRestoresState(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	reg := lobby.NewSessionRegistry()
+	mgr := lobby.NewLobbyManager(reg)
+	handler := NewHandler(reg, mgr)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	// 1. Connect Host and Guest
+	connHost, playerHost, _ := connectAndHandshake(t, ctx, server.URL, "HostAdmiral", "")
+	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
+
+	connGuest, playerGuest, _ := connectAndHandshake(t, ctx, server.URL, "GuestCommander", "")
+
+	// 2. Host creates room
+	createMsg, _ := json.Marshal(OutboundMessage{Type: TypeLobbyCreate, Payload: map[string]any{}})
+	_ = connHost.Write(ctx, websocket.MessageText, createMsg)
+	_, pCreate := readEnvelope(t, ctx, connHost)
+	var roomStateHost lobby.RoomStateView
+	_ = json.Unmarshal(pCreate, &roomStateHost)
+	roomID := roomStateHost.RoomID
+	_, _ = readEnvelope(t, ctx, connGuest) // guest receives lobby.update upsert
+
+	// 3. Guest joins room
+	joinMsg, _ := json.Marshal(OutboundMessage{Type: TypeLobbyJoin, Payload: LobbyJoinPayload{RoomID: roomID}})
+	_ = connGuest.Write(ctx, websocket.MessageText, joinMsg)
+	_, _ = readEnvelope(t, ctx, connHost)  // host receives room.state
+	_, _ = readEnvelope(t, ctx, connHost)  // host receives room.readyState
+	_, _ = readEnvelope(t, ctx, connGuest) // guest receives room.state
+	_, _ = readEnvelope(t, ctx, connGuest) // guest receives room.readyState
+
+	// 4. Both ready up -> transitions to placement
+	readyMsg, _ := json.Marshal(OutboundMessage{Type: TypeRoomReady, Payload: map[string]any{}})
+	_ = connHost.Write(ctx, websocket.MessageText, readyMsg)
+	_, _ = readEnvelope(t, ctx, connHost)  // room.readyState
+	_, _ = readEnvelope(t, ctx, connGuest) // room.readyState
+
+	_ = connGuest.Write(ctx, websocket.MessageText, readyMsg)
+	_, _ = readEnvelope(t, ctx, connHost)  // room.readyState
+	_, _ = readEnvelope(t, ctx, connGuest) // room.readyState
+	_, _ = readEnvelope(t, ctx, connHost)  // room.state (placement)
+	_, _ = readEnvelope(t, ctx, connGuest) // room.state (placement)
+
+	// 5. Guest closes tab / drops connection
+	_ = connGuest.Close(websocket.StatusNormalClosure, "leaving tab")
+
+	// Host should receive opponent.disconnected
+	tHostDisconnect, _ := readEnvelope(t, ctx, connHost)
+	if tHostDisconnect != TypeOpponentDisconnected {
+		t.Fatalf("expected host to receive opponent.disconnected, got %s", tHostDisconnect)
+	}
+
+	// 6. Guest reconnects with their existing session token
+	connGuestNew, helloOKGuest, _ := connectAndHandshake(t, ctx, server.URL, "GuestCommander", playerGuest.SessionToken)
+	defer func() { _ = connGuestNew.Close(websocket.StatusNormalClosure, "done") }()
+
+	if helloOKGuest.RestoredState == nil {
+		t.Fatalf("expected guest to have restoredState in hello.ok, got nil")
+	}
+
+	// Verify restoredState marshals cleanly without channel/timer errors and has correct phase
+	restoredBytes, err := json.Marshal(helloOKGuest.RestoredState)
+	if err != nil {
+		t.Fatalf("failed to marshal restoredState: %v", err)
+	}
+
+	var restoredView lobby.RoomStateView
+	if err := json.Unmarshal(restoredBytes, &restoredView); err != nil {
+		t.Fatalf("failed to unmarshal restoredState to RoomStateView: %v", err)
+	}
+
+	if restoredView.RoomID != roomID {
+		t.Errorf("expected restored roomId %s, got %s", roomID, restoredView.RoomID)
+	}
+	if restoredView.Phase != lobby.PhasePlacement {
+		t.Errorf("expected restored phase %s, got %s", lobby.PhasePlacement, restoredView.Phase)
+	}
+	if restoredView.Role != "guest" {
+		t.Errorf("expected restored role guest, got %s", restoredView.Role)
+	}
+
+	// Host should receive opponent.reconnected
+	tHostReconnect, _ := readEnvelope(t, ctx, connHost)
+	if tHostReconnect != TypeOpponentReconnected {
+		t.Fatalf("expected host to receive opponent.reconnected, got %s", tHostReconnect)
+	}
+
+	// Guest should also receive room.state over newly established connection
+	tGuestState, _ := readEnvelope(t, ctx, connGuestNew)
+	if tGuestState != TypeRoomState {
+		t.Fatalf("expected guest to receive room.state, got %s", tGuestState)
+	}
+
+	_ = playerHost
+}

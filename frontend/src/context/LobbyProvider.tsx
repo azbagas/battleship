@@ -10,6 +10,7 @@ import {
   HelloOKPayload,
   LobbySnapshotPayload,
   LobbyUpdatePayload,
+  OpponentDisconnectedPayload,
   PlacedShip,
   PlacementConfirmedPayload,
   PlacementOpponentReadyPayload,
@@ -71,6 +72,10 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
   const [recentEvents, setRecentEvents] = useState<BattleShotResultPayload[]>([])
   const [gameOverResult, setGameOverResult] = useState<GameOverPayload | null>(null)
 
+  // Disconnect & recovery states
+  const [opponentDisconnectDeadline, setOpponentDisconnectDeadline] = useState<string | null>(null)
+  const [serverRestartNotice, setServerRestartNotice] = useState<string | null>(null)
+
   const isMyTurn = Boolean(
     session.player &&
       turnPlayerId &&
@@ -117,6 +122,11 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
         const state = payload.restoredState as Partial<RoomStatePayload>
         if (state.roomId && state.phase) {
           setActiveRoom(payload.restoredState as RoomStatePayload)
+          if (state.opponentDisconnected && state.opponentGraceDeadline) {
+            setOpponentDisconnectDeadline(state.opponentGraceDeadline)
+          } else {
+            setOpponentDisconnectDeadline(null)
+          }
           if (typeof state.hostReady === 'boolean' && typeof state.guestReady === 'boolean') {
             setReadyState({ hostReady: state.hostReady, guestReady: state.guestReady })
           }
@@ -168,6 +178,22 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
             }
           }
         }
+      } else {
+        // If the player previously had an active room and restoredState is null/empty,
+        // the server restarted and cleared live matches.
+        setActiveRoom((prev) => {
+          if (prev && prev.roomId) {
+            setServerRestartNotice('Your in-progress game was lost because the server restarted.')
+          }
+          return null
+        })
+        setReadyState(null)
+        setIsFleetConfirmed(false)
+        setIsOpponentConfirmed(false)
+        setOwnFleet([])
+        setPlacementDeadline(null)
+        setOpponentDisconnectDeadline(null)
+        resetBattleState()
       }
     })
 
@@ -190,6 +216,7 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       setIsOpponentConfirmed(false)
       setOwnFleet([])
       setPlacementDeadline(null)
+      setOpponentDisconnectDeadline(null)
       resetBattleState()
     })
 
@@ -220,6 +247,11 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
     const unsubRoomState = client.onMessage<RoomStatePayload>('room.state', (payload) => {
       if (!payload || !payload.roomId) return
       setActiveRoom(payload)
+      if (payload.opponentDisconnected && payload.opponentGraceDeadline) {
+        setOpponentDisconnectDeadline(payload.opponentGraceDeadline)
+      } else {
+        setOpponentDisconnectDeadline(null)
+      }
       if (typeof payload.hostReady === 'boolean' && typeof payload.guestReady === 'boolean') {
         setReadyState({ hostReady: payload.hostReady, guestReady: payload.guestReady })
       }
@@ -354,6 +386,23 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       (payload) => {
         if (!payload) return
         setGameOverResult(payload)
+        setOpponentDisconnectDeadline(null)
+      },
+    )
+
+    const unsubOpponentDisconnected = client.onMessage<OpponentDisconnectedPayload>(
+      'opponent.disconnected',
+      (payload) => {
+        if (payload?.graceDeadline) {
+          setOpponentDisconnectDeadline(payload.graceDeadline)
+        }
+      },
+    )
+
+    const unsubOpponentReconnected = client.onMessage(
+      'opponent.reconnected',
+      () => {
+        setOpponentDisconnectDeadline(null)
       },
     )
 
@@ -421,6 +470,8 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       unsubBattleTurn()
       unsubBattleShotResult()
       unsubGameOver()
+      unsubOpponentDisconnected()
+      unsubOpponentReconnected()
       unsubError()
     }
   }, [client, session.player, resetBattleState])
@@ -465,11 +516,25 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
     }
   }, [activeRoom, readyState, client])
 
+  const clearServerRestartNotice = useCallback(() => {
+    setServerRestartNotice(null)
+  }, [])
+
+  const forfeitGame = useCallback(() => {
+    setIsLeavingRoom(true)
+    setLobbyError(null)
+    client.send('game.leave', {})
+  }, [client])
+
   const leaveRoom = useCallback(() => {
     setIsLeavingRoom(true)
     setLobbyError(null)
-    client.send('room.leave', {})
-  }, [client])
+    if (activeRoom && (activeRoom.phase === 'placement' || activeRoom.phase === 'battle')) {
+      client.send('game.leave', {})
+    } else {
+      client.send('room.leave', {})
+    }
+  }, [activeRoom, client])
 
   const submitFleet = useCallback(
     (ships: PlacedShip[]) => {
@@ -524,6 +589,10 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       recentEvents,
       gameOverResult,
       fireShot,
+      opponentDisconnectDeadline,
+      serverRestartNotice,
+      clearServerRestartNotice,
+      forfeitGame,
     }),
     [
       rooms,
@@ -559,6 +628,10 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       recentEvents,
       gameOverResult,
       fireShot,
+      opponentDisconnectDeadline,
+      serverRestartNotice,
+      clearServerRestartNotice,
+      forfeitGame,
     ],
   )
 

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { useLobby } from '../context/LobbyContext'
 import { useSession } from '../context/SessionContext'
 import { ConnectionBadge } from './ConnectionBadge'
+import { OpponentDisconnectBanner } from './OpponentDisconnectBanner'
 import { PlacedShip, ShipType } from '../types/protocol'
 import {
   COLUMN_LABELS,
@@ -26,7 +27,9 @@ export const BattleScreen: React.FC = () => {
     gameOverResult,
     fireShot,
     leaveRoom,
+    forfeitGame,
     isLeavingRoom,
+    opponentDisconnectDeadline,
     lobbyError,
     clearLobbyError,
   } = useLobby()
@@ -149,6 +152,22 @@ export const BattleScreen: React.FC = () => {
 
   return (
     <div className="w-full max-w-6xl mx-auto flex flex-col gap-4">
+      {/* Self Reconnecting Notice Banner */}
+      {(connectionStatus === 'connecting' || connectionStatus === 'disconnected') && (
+        <div
+          role="status"
+          className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono flex items-center gap-2"
+        >
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+          <span>Connection lost. Attempting to restore link to sector... Play will resume once reconnected.</span>
+        </div>
+      )}
+
+      {/* Opponent Disconnect Grace Countdown Banner */}
+      {opponentDisconnectDeadline && (
+        <OpponentDisconnectBanner opponentName={opponentName} />
+      )}
+
       {/* Sector Header */}
       <header className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl bg-slate-900/80 border border-slate-800 shadow-xl backdrop-blur-sm">
         <div className="flex items-center gap-3">
@@ -176,7 +195,7 @@ export const BattleScreen: React.FC = () => {
               onClick={() => setShowSurrenderConfirm(true)}
               className="text-xs font-mono text-rose-400 hover:text-rose-300 underline underline-offset-4 transition-colors"
             >
-              Surrender
+              Leave Game
             </button>
           )}
         </div>
@@ -757,10 +776,10 @@ export const BattleScreen: React.FC = () => {
               ⚠️
             </div>
             <h3 id="surrender-title" className="text-lg font-mono font-bold uppercase text-white">
-              Surrender Engagement?
+              Leave Game / Forfeit Match?
             </h3>
             <p className="text-xs text-slate-300 font-mono">
-              Conceding will forfeit the match immediately and award the victory to{' '}
+              Leaving will forfeit the match immediately and award the victory to{' '}
               <strong className="text-white">{opponentName}</strong>. This cannot be undone.
             </p>
             <div className="flex items-center justify-center gap-3 pt-2">
@@ -776,11 +795,11 @@ export const BattleScreen: React.FC = () => {
                 disabled={isLeavingRoom}
                 onClick={() => {
                   setShowSurrenderConfirm(false)
-                  leaveRoom()
+                  forfeitGame()
                 }}
                 className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-mono font-bold transition-all disabled:opacity-50"
               >
-                {isLeavingRoom ? 'Surrendering...' : 'Confirm Forfeit'}
+                {isLeavingRoom ? 'Forfeiting...' : 'Confirm Forfeit'}
               </button>
             </div>
           </div>

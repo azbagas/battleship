@@ -2,6 +2,7 @@ package ws
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/azbagas/battleship/backend/internal/game"
 )
@@ -10,17 +11,17 @@ import (
 type MessageType string
 
 const (
-	TypeHello          MessageType = "hello"
-	TypeHelloOK        MessageType = "hello.ok"
-	TypeError          MessageType = "error"
-	TypeLobbyCreate    MessageType = "lobby.create"
-	TypeLobbyCancel    MessageType = "lobby.cancel"
-	TypeLobbyJoin      MessageType = "lobby.join"
-	TypeLobbySnapshot  MessageType = "lobby.snapshot"
-	TypeLobbyUpdate    MessageType = "lobby.update"
-	TypeRoomState      MessageType = "room.state"
-	TypeRoomReady      MessageType = "room.ready"
-	TypeRoomUnready    MessageType = "room.unready"
+	TypeHello                  MessageType = "hello"
+	TypeHelloOK                MessageType = "hello.ok"
+	TypeError                  MessageType = "error"
+	TypeLobbyCreate            MessageType = "lobby.create"
+	TypeLobbyCancel            MessageType = "lobby.cancel"
+	TypeLobbyJoin              MessageType = "lobby.join"
+	TypeLobbySnapshot          MessageType = "lobby.snapshot"
+	TypeLobbyUpdate            MessageType = "lobby.update"
+	TypeRoomState              MessageType = "room.state"
+	TypeRoomReady              MessageType = "room.ready"
+	TypeRoomUnready            MessageType = "room.unready"
 	TypeRoomLeave              MessageType = "room.leave"
 	TypeGameLeave              MessageType = "game.leave"
 	TypeRoomReadyState         MessageType = "room.readyState"
@@ -33,6 +34,8 @@ const (
 	TypeBattleShotResult       MessageType = "battle.shotResult"
 	TypeBattleTurn             MessageType = "battle.turn"
 	TypeGameOver               MessageType = "game.over"
+	TypeOpponentDisconnected   MessageType = "opponent.disconnected"
+	TypeOpponentReconnected    MessageType = "opponent.reconnected"
 )
 
 // InboundMessage represents a received client JSON envelope.
@@ -120,6 +123,14 @@ type GameOverPayload struct {
 	Reason         string `json:"reason"`
 	TotalShots     int    `json:"totalShots"`
 }
+
+// OpponentDisconnectedPayload notifies a player that their opponent lost connection.
+type OpponentDisconnectedPayload struct {
+	GraceDeadline time.Time `json:"graceDeadline"`
+}
+
+// OpponentReconnectedPayload notifies a player that their opponent reconnected.
+type OpponentReconnectedPayload struct{}
 
 // Standard protocol error codes.
 const (

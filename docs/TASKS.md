@@ -4,13 +4,13 @@
      Tag tasks with feature IDs. Each task has a "Done when" line. -->
 
 ## Current focus
-In progress: T-14 [F-06] Implement backend WebSocket ping/pong heartbeats, 60-second disconnect grace timer (`opponent.disconnected`, `opponent.reconnected`), timeout forfeit/abandonment resolution, and explicit `game.leave` forfeit.
+In progress: none (ready for T-16 [F-07])
 
 Blocked: nothing
 
 Known issues: none
 
-Next up: T-15 [F-06] Build frontend automatic reconnection with backoff, connection status indicator, opponent disconnect countdown banner, **Leave game** confirmation prompt, and server-restart lost-game notification.
+Next up: T-16 [F-07] Implement `internal/store` SQLite persistence (`modernc.org/sqlite`) to write a `games` record once per finished match (`all_sunk`, `forfeit`, `disconnect_timeout`, `abandoned`) including shot count and JSON `shot_log`.
 
 <!-- Update this block at the end of every session. If it passes ~15 lines, move it to STATUS.md. -->
 
@@ -59,9 +59,9 @@ Next up: T-15 [F-06] Build frontend automatic reconnection with backoff, connect
   Done when: two players can play a complete battle from first shot to sinking all 5 ships and see accurate turn timers, shot markers, sunk ship reveals, and event log entries.
 
 ### F-06 Disconnect Handling, Reconnection & Forfeit
-- [ ] T-14 [F-06] Implement backend WebSocket ping/pong heartbeats, 60-second disconnect grace timer (`opponent.disconnected`, `opponent.reconnected`), timeout forfeit/abandonment resolution, and explicit `game.leave` forfeit.
+- [x] T-14 [F-06] Implement backend WebSocket ping/pong heartbeats, 60-second disconnect grace timer (`opponent.disconnected`, `opponent.reconnected`), timeout forfeit/abandonment resolution, and explicit `game.leave` forfeit.
   Done when: room and timer tests verify seamless state restoration within 60s, opponent win on single-player disconnect timeout or `game.leave`, and `abandoned` outcome when both players time out.
-- [ ] T-15 [F-06] Build frontend automatic reconnection with backoff, connection status indicator, opponent disconnect countdown banner, **Leave game** confirmation prompt, and server-restart lost-game notification.
+- [x] T-15 [F-06] Build frontend automatic reconnection with backoff, connection status indicator, opponent disconnect countdown banner, **Leave game** confirmation prompt, and server-restart lost-game notification.
   Done when: refreshing or dropping connection briefly resumes the match, opponent sees the 60s disconnect banner, confirming **Leave game** forfeits immediately, and reconnecting after a server restart returns cleanly to the lobby with a notice.
 
 ### F-07 Game Over, Rematch & Match History Recording
@@ -105,6 +105,8 @@ Next up: T-15 [F-06] Build frontend automatic reconnection with backoff, connect
 - 2026-11-10: T-11 implemented pure `internal/game` combat mechanics: shot resolution into miss/hit/sunk, sunk vessel details (type and cells), random first-player selection, uniform random untargeted cell selector for turn timeouts, win detection on sinking all 5 ships, and zero-leakage player board view projection verified against JSON serialization leaks.
 - 2026-11-10: T-12 implemented backend battle phase loop (`battle.start`, `battle.fire`, `battle.shotResult`, `battle.turn`, `game.over`), 30-second turn timer with injectable clock and random auto-shots on timeout, strict turn alternation, out-of-turn and duplicate-cell rejection, and room transition to `PhaseFinished` on win. Full room and WebSocket integration tests verify race freedom.
 - 2026-11-10: T-13 implemented frontend Battle screen (`BattleScreen.tsx`) featuring primary Target Radar Grid (10×10), Defensive Fleet Grid (10×10), 30s urgency turn timer with countdown progress bar and `<10s` red alert pulsing, friendly/hostile remaining ships rosters with health pips and sunk badges, colorblind-accessible symbols (`•` miss, `✕` hit, sunken hull outline), live tactical combat event log with `AUTO` badges, responsive mobile tab switcher (supporting 360px viewports without horizontal scrolling), surrender confirmation modal, and Game Over overlay announcing victory/defeat with lobby return CTA. Verified with 13 frontend test suites (89 passing tests), clean ESLint, and zero TypeScript build errors.
+- 2026-11-10: T-14 & T-15 implemented disconnect handling, heartbeats, reconnection, and forfeit across backend and frontend (F-06). Backend incorporates a 15s WebSocket ping/pong heartbeat with 5s timeout, 60s disconnect grace period across ready-up, placement, and battle phases (`opponent.disconnected`, `opponent.reconnected`), concurrent turn/placement timer execution during disconnect, grace timeout resolution (`disconnect_timeout` forfeit vs mutual `abandoned`), and explicit `game.leave` forfeit in placement/battle phases. Frontend features exponential backoff auto-reconnection, `OpponentDisconnectBanner` with live seconds countdown (<10s urgency styling), Leave Game confirmation modals in `PlacementScreen` and `BattleScreen`, and server-restart lost-game notice alert in `LobbyScreen`. Verified with backend unit/integration tests (`-race`), 14 frontend test suites (100 passing tests), and clean builds.
+- 2026-11-10: Fixed reconnection during active placement/battle: `HandleReconnect` was returning internal `*Room` containing active `Timer` channels (`<-chan time.Time`) which caused JSON marshaling failures on `hello.ok`. Updated `HandleReconnect` to return filtered `*RoomStateView` and register WebSocket connection senders after `hello.ok` handshake, ensuring clean JSON serialization, zero coordinate leakage, and guaranteed `hello.ok` delivery as the first message on the wire. Added integration test `TestHandler_ReconnectInPlacementRestoresState`.
 
 ## Archive
 <!-- Move finished version groups here as one-line summaries, e.g. "v1 shipped: F-01 to F-03." -->
