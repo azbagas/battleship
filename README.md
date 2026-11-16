@@ -1,5 +1,9 @@
 # Battleship
 
+<p align="center">
+  <img src="frontend/public/logo.svg" alt="Battleship Logo" width="96" />
+</p>
+
 A browser-based, real-time, two-player online Battleship game built as a React/TypeScript SPA frontend with a server-authoritative Go + SQLite backend over WebSockets.
 
 ## Documentation

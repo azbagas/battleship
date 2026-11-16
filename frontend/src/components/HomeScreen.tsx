@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { useSession } from '../context/SessionContext'
 import { sanitizeDisplayName } from '../utils/sanitize'
 import { ConnectionBadge } from './ConnectionBadge'
+import { BrandLogo } from './BrandLogo'
 
 export const HomeScreen: React.FC = () => {
   const {
@@ -60,25 +61,7 @@ export const HomeScreen: React.FC = () => {
         {/* Top Header & Status */}
         <div className="flex items-center justify-between pb-6 border-b border-slate-800/80 mb-6">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
-              {/* Radar/Naval crosshair icon */}
-              <svg
-                className="w-5 h-5"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <circle cx="12" cy="12" r="10"></circle>
-                <line x1="22" y1="12" x2="18" y2="12"></line>
-                <line x1="6" y1="12" x2="2" y2="12"></line>
-                <line x1="12" y1="6" x2="12" y2="2"></line>
-                <line x1="12" y1="22" x2="12" y2="18"></line>
-              </svg>
-            </div>
+            <BrandLogo size="sm" />
             <div>
               <h1 className="text-xl font-bold tracking-tight text-white">Battleship</h1>
               <p className="text-xs text-slate-400">Naval Combat Command</p>

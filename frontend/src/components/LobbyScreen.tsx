@@ -3,6 +3,7 @@ import { useLobby } from '../context/LobbyContext'
 import { useSession } from '../context/SessionContext'
 import { useElapsedTime } from '../hooks/useElapsedTime'
 import { ConnectionBadge } from './ConnectionBadge'
+import { BrandLogo } from './BrandLogo'
 import { WaitingRoomView } from '../types/protocol'
 
 interface RoomItemProps {
@@ -131,24 +132,7 @@ export const LobbyScreen: React.FC = () => {
         {/* Top Header & Session Bar */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-slate-800/80 mb-6 gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 shrink-0">
-              <svg
-                className="w-5 h-5"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <line x1="22" y1="12" x2="18" y2="12" />
-                <line x1="6" y1="12" x2="2" y2="12" />
-                <line x1="12" y1="6" x2="12" y2="2" />
-                <line x1="12" y1="22" x2="12" y2="18" />
-              </svg>
-            </div>
+            <BrandLogo size="md" />
             <div>
               <h1 className="text-xl font-bold tracking-tight text-white">Battleship</h1>
               <p className="text-xs text-slate-400">Public Battle Lobby</p>
