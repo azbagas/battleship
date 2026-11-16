@@ -27,7 +27,7 @@ battleship/
 │   └── internal/store/  # SQLite persistence for completed games
 ├── docker-compose.yml   # Single-VPS deployment stack
 ├── README.md            # Human-facing setup and usage
-└── docs/                # PRD.md, ARCHITECTURE.md, TASKS.md, protocol.md
+└── docs/                # PRD.md, ARCHITECTURE.md, TASKS.md, PROTOCOL.md
 ```
 
 ## Components & Responsibilities
@@ -80,7 +80,7 @@ Written once per finished game (no personal data beyond self-chosen display name
 - `shot_log`: `TEXT NOT NULL` — JSON array of ordered shots and results for future analytics/replay.
 
 ### WebSocket Protocol Summary
-All messages are JSON envelopes of the form `{ "type": string, "payload": object }` (full wire specification documented in `docs/protocol.md` during implementation):
+All messages are JSON envelopes of the form `{ "type": string, "payload": object }` (full wire specification documented in `docs/PROTOCOL.md` during implementation):
 - **Client → Server:**
   - `hello` (`name`, optional `sessionToken`)
   - `lobby.create`, `lobby.cancel`, `lobby.join` (`roomId`)
@@ -116,12 +116,13 @@ All messages are JSON envelopes of the form `{ "type": string, "payload": object
 - **Per-player state projection:** The server builds tailored views per player and never serializes raw opponent board structs to clients. Trade-off: Two serialization passes per state snapshot, guaranteeing zero information leakage of unrevealed ships.
 - **In-memory live state + SQLite only on game end:** Active rooms and boards live exclusively in Go memory; SQLite is written once when a game finishes using pure-Go `modernc.org/sqlite`. Trade-off: A server restart drops in-flight games, which is explicitly acceptable for v1 in exchange for low latency and zero CGO/external DB dependencies.
 - **Single active connection per session token:** A second WebSocket connection presenting an already-connected `sessionToken` is rejected so the existing tab stays active. Trade-off: Users cannot mirror the same game across two open tabs simultaneously, avoiding split-brain client state.
+- **In-memory token bucket rate limiting and IP connection tracking:** Per-connection message rate limiting (10 msg/s, burst 20) is managed directly on the connection actor via an in-memory token bucket, while client IPs are normalized and capped (10 concurrent conns/IP) via a synchronized IP tracker. Trade-off: Limits are local to the process and reset on restart, matching the single-VPS in-memory architecture without requiring Redis.
 
 ## Constraints & Non-Goals
-- **Fairness & Validation (NFR-1 to NFR-4):** Server is the sole source of truth; every client message is validated for schema, size, game phase, and turn ownership. Malformed or out-of-turn messages return an `error` event and never crash the server.
-- **Abuse & Resource Limits (NFR-5 to NFR-7):** Global cap of 10 concurrent rooms (waiting + active); per-connection message rate limit and max payload size; per-IP concurrent connection cap; strict WebSocket `Origin` header check; plain-text rendering of display names (1–20 chars, control chars stripped).
+- **Fairness & Validation (NFR-1 to NFR-4):** Server is the sole source of truth; every client message is validated for schema, size (max 32 KB via `conn.SetReadLimit`), game phase, and turn ownership. Malformed or out-of-turn messages return an `error` event and never crash the server.
+- **Abuse & Resource Limits (NFR-5 to NFR-7):** Global cap of 10 concurrent rooms (waiting + active); per-connection message rate limit (10 msg/s, burst 20, returning `RATE_LIMIT_EXCEEDED`); max read payload size of 32 KB; per-IP concurrent connection cap of 10 (`429 Too Many Requests`); strict WebSocket `Origin` header verification (`ALLOWED_ORIGINS` pattern matching); plain-text rendering of display names (1–20 chars, control chars stripped).
 - **Scale & Latency Targets (NFR-8 to NFR-10):** Single VPS instance supports ~100 concurrent connections (tens of concurrent games) with < 300 ms typical shot turnaround and prompt dead-peer detection via WebSocket ping/pong heartbeats.
-- **Operability (NFR-12, NFR-13):** `/healthz` HTTP endpoint for container health checks; graceful `SIGTERM` handling that stops new room creation and closes connections cleanly; timeouts and caps configurable via environment variables.
+- **Operability (NFR-12, NFR-13):** `/healthz` HTTP endpoint for container health checks; graceful `SIGTERM` handling draining active WebSocket connections cleanly with code 1001 (`websocket.StatusGoingAway`) within 5 seconds; operational limits and timeouts configurable via environment variables (`PORT`, `LOG_LEVEL`, `LOG_FORMAT`, `DB_PATH`, `ALLOWED_ORIGINS`, `MAX_PAYLOAD_BYTES`, `MAX_CONNS_PER_IP`, `RATE_LIMIT_MESSAGES_PER_SEC`, `RATE_LIMIT_BURST`).
 - **Deliberate Non-Goals:** No horizontal scaling, no multi-node state synchronization, no persistent accounts, and no audio in v1.
 
 ## Known Technical Debt

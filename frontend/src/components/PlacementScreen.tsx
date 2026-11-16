@@ -46,6 +46,8 @@ export const PlacementScreen: React.FC = () => {
   const [draggedShipType, setDraggedShipType] = useState<ShipType | null>(null)
   // Hovered cell for placement preview
   const [hoveredCoord, setHoveredCoord] = useState<Coord | null>(null)
+  // Focused coordinate for keyboard navigation
+  const [focusedCoord, setFocusedCoord] = useState<Coord>({ x: 0, y: 0 })
 
   // Timer countdown
   const [secondsRemaining, setSecondsRemaining] = useState<number>(60)
@@ -101,29 +103,30 @@ export const PlacementScreen: React.FC = () => {
   const fleetValidation = useMemo(() => validateCompleteFleet(ships), [ships])
   const isFleetComplete = fleetValidation.valid
 
-  // Hover preview calculation
+  // Hover or keyboard preview calculation
   const activeShipTypeForPreview = draggedShipType || selectedShipType
+  const activePreviewCoord = hoveredCoord || (selectedShipType ? focusedCoord : null)
   const hoverPreview = useMemo(() => {
-    if (!hoveredCoord || !activeShipTypeForPreview || isFleetConfirmed) {
+    if (!activePreviewCoord || !activeShipTypeForPreview || isFleetConfirmed) {
       return null
     }
     const size = SHIP_SIZES[activeShipTypeForPreview]
-    const inBounds = isShipInBounds(hoveredCoord, size, currentOrientation)
+    const inBounds = isShipInBounds(activePreviewCoord, size, currentOrientation)
     const candidate: PlacedShip = {
       type: activeShipTypeForPreview,
-      origin: hoveredCoord,
+      origin: activePreviewCoord,
       orientation: currentOrientation,
     }
     const valid = isValidPlacement(candidate, ships)
     const cells = inBounds
-      ? getShipCells(hoveredCoord, size, currentOrientation)
+      ? getShipCells(activePreviewCoord, size, currentOrientation)
       : []
 
     return {
       cells,
       valid,
     }
-  }, [hoveredCoord, activeShipTypeForPreview, currentOrientation, isFleetConfirmed, ships])
+  }, [activePreviewCoord, activeShipTypeForPreview, currentOrientation, isFleetConfirmed, ships])
 
   // Set of preview cell keys
   const previewCellMap = useMemo(() => {
@@ -160,23 +163,10 @@ export const PlacementScreen: React.FC = () => {
     }
   }, [isFleetConfirmed, currentOrientation, selectedShipType, placedShipTypes, ships])
 
-  // Keyboard shortcut: 'R' key rotates active orientation
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (isFleetConfirmed) return
-      if (e.key === 'r' || e.key === 'R') {
-        e.preventDefault()
-        handleRotate()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handleRotate, isFleetConfirmed])
-
   // Place ship at target coordinate
   const placeShipAt = useCallback(
     (type: ShipType, coord: Coord, orientation: Orientation) => {
-      if (isFleetConfirmed) return
+      if (isFleetConfirmed) return false
       const candidate: PlacedShip = {
         type,
         origin: coord,
@@ -198,25 +188,103 @@ export const PlacementScreen: React.FC = () => {
   )
 
   // Cell Click (tap-to-place or select placed ship)
-  const handleCellClick = (x: number, y: number) => {
-    if (isFleetConfirmed) return
-    const cellKey = `${x},${y}`
-    const occupied = occupiedCellMap.get(cellKey)
+  const handleCellClick = useCallback(
+    (x: number, y: number) => {
+      if (isFleetConfirmed) return
+      const cellKey = `${x},${y}`
+      const occupied = occupiedCellMap.get(cellKey)
 
-    // If a ship is selected from dock or moved: try to place it
-    if (selectedShipType) {
-      const placed = placeShipAt(selectedShipType, { x, y }, currentOrientation)
-      if (placed) return
-    }
+      // If a ship is selected from dock or moved: try to place it
+      if (selectedShipType) {
+        const placed = placeShipAt(selectedShipType, { x, y }, currentOrientation)
+        if (placed) return
+      }
 
-    // If clicking an already placed ship on the grid, select it for rotation or repositioning
-    if (occupied) {
-      setSelectedShipType(occupied.ship.type)
-      setCurrentOrientation(occupied.ship.orientation)
-    } else {
-      setSelectedShipType(null)
+      // If clicking an already placed ship on the grid, select it for rotation or repositioning
+      if (occupied) {
+        setSelectedShipType(occupied.ship.type)
+        setCurrentOrientation(occupied.ship.orientation)
+      } else {
+        setSelectedShipType(null)
+      }
+    },
+    [isFleetConfirmed, occupiedCellMap, selectedShipType, placeShipAt, currentOrientation],
+  )
+
+  // Confirm fleet
+  const handleConfirm = useCallback(() => {
+    if (isFleetConfirmed || !isFleetComplete) return
+    submitFleet(ships)
+  }, [isFleetConfirmed, isFleetComplete, submitFleet, ships])
+
+  // Desktop keyboard navigation & shortcuts: Arrow keys, 1-5, R, Enter/Space, Esc, C
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (isFleetConfirmed) return
+
+      const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase()
+      if (targetTag === 'input' || targetTag === 'textarea') return
+
+      if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault()
+        handleRotate()
+        return
+      }
+
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setFocusedCoord((c) => ({ ...c, y: Math.max(0, c.y - 1) }))
+        return
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setFocusedCoord((c) => ({ ...c, y: Math.min(9, c.y + 1) }))
+        return
+      }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        setFocusedCoord((c) => ({ ...c, x: Math.max(0, c.x - 1) }))
+        return
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        setFocusedCoord((c) => ({ ...c, x: Math.min(9, c.x + 1) }))
+        return
+      }
+
+      // 1-5 to select ship from fleet dock
+      if (['1', '2', '3', '4', '5'].includes(e.key)) {
+        const idx = parseInt(e.key, 10) - 1
+        if (FLEET_SHIPS[idx]) {
+          e.preventDefault()
+          setSelectedShipType(FLEET_SHIPS[idx].type)
+        }
+        return
+      }
+
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        handleCellClick(focusedCoord.x, focusedCoord.y)
+        return
+      }
+
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSelectedShipType(null)
+        return
+      }
+
+      if (e.key === 'c' || e.key === 'C') {
+        if (isFleetComplete && !isFleetConfirmed) {
+          e.preventDefault()
+          handleConfirm()
+        }
+        return
+      }
     }
-  }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleRotate, isFleetConfirmed, focusedCoord, isFleetComplete, handleCellClick, handleConfirm])
 
   // Remove ship back to dock
   const handleRemoveShip = (type: ShipType) => {
@@ -240,12 +308,6 @@ export const PlacementScreen: React.FC = () => {
     if (isFleetConfirmed) return
     setShips([])
     setSelectedShipType(null)
-  }
-
-  // Confirm fleet
-  const handleConfirm = () => {
-    if (isFleetConfirmed || !isFleetComplete) return
-    submitFleet(ships)
   }
 
   // Drag and drop handlers
@@ -274,7 +336,7 @@ export const PlacementScreen: React.FC = () => {
   }
 
   return (
-    <div className="w-full max-w-5xl mx-auto px-2 sm:px-4 py-4 space-y-4">
+    <div className="w-full max-w-5xl mx-auto px-1 sm:px-4 py-3 sm:py-4 space-y-4">
       {/* Self Reconnecting Notice Banner */}
       {(connectionStatus === 'connecting' || connectionStatus === 'disconnected') && (
         <div
@@ -422,7 +484,7 @@ export const PlacementScreen: React.FC = () => {
       {/* Main Grid & Dock Content */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
         {/* Ocean Grid Area (Left / Center) */}
-        <div className="lg:col-span-7 bg-slate-900/90 backdrop-blur-md rounded-2xl p-4 sm:p-6 shadow-2xl border border-slate-800 flex flex-col items-center">
+        <div className="lg:col-span-7 bg-slate-900/90 backdrop-blur-md rounded-2xl p-2.5 sm:p-4 md:p-6 shadow-2xl border border-slate-800 flex flex-col items-center">
           <div className="w-full flex items-center justify-between mb-4">
             <h2 className="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
@@ -436,11 +498,11 @@ export const PlacementScreen: React.FC = () => {
           {/* Tactical 10x10 Grid */}
           <div className="relative inline-block select-none overflow-x-auto max-w-full">
             {/* Column Headers A-J */}
-            <div className="flex ml-7 mb-1">
+            <div className="flex ml-5 sm:ml-7 mb-1">
               {COLUMN_LABELS.map((col) => (
                 <div
                   key={col}
-                  className="w-8 h-6 sm:w-10 sm:h-7 flex items-center justify-center text-[11px] sm:text-xs font-mono font-bold text-slate-400"
+                  className="w-[26px] h-5 sm:w-8 sm:h-6 md:w-10 md:h-7 flex items-center justify-center text-[10px] sm:text-xs font-mono font-bold text-slate-400"
                 >
                   {col}
                 </div>
@@ -448,11 +510,11 @@ export const PlacementScreen: React.FC = () => {
             </div>
 
             {/* Grid Rows */}
-            <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-0.5 sm:gap-1">
               {ROW_LABELS.map((row, y) => (
-                <div key={row} className="flex items-center gap-1">
+                <div key={row} className="flex items-center gap-0.5 sm:gap-1">
                   {/* Row Label 1-10 */}
-                  <div className="w-6 sm:w-6 text-right pr-2 text-[11px] sm:text-xs font-mono font-bold text-slate-400">
+                  <div className="w-5 sm:w-6 text-right pr-1 sm:pr-2 text-[10px] sm:text-xs font-mono font-bold text-slate-400">
                     {row}
                   </div>
 
@@ -464,6 +526,8 @@ export const PlacementScreen: React.FC = () => {
                     const isPreviewValid = previewCellMap.get(cellKey)
                     const isSelected =
                       selectedShipType && occupied?.ship.type === selectedShipType
+                    const isFocused = focusedCoord.x === x && focusedCoord.y === y
+                    const focusRing = isFocused && !isFleetConfirmed ? 'ring-2 ring-cyan-400 ring-offset-1 ring-offset-slate-950 z-10' : ''
 
                     let cellBg = 'bg-slate-950/70 border-slate-800/80 hover:border-cyan-500/40'
 
@@ -483,6 +547,8 @@ export const PlacementScreen: React.FC = () => {
                       <button
                         key={cellKey}
                         type="button"
+                        tabIndex={isFocused ? 0 : -1}
+                        onFocus={() => setFocusedCoord({ x, y })}
                         aria-label={`Cell ${COLUMN_LABELS[x]}${row}${
                           occupied ? `, ${occupied.ship.type}` : ''
                         }`}
@@ -492,9 +558,9 @@ export const PlacementScreen: React.FC = () => {
                         onDragOver={(e) => handleCellDragOver(x, y, e)}
                         onDrop={(e) => handleDrop(x, y, e)}
                         disabled={isFleetConfirmed}
-                        className={`w-8 h-8 sm:w-10 sm:h-10 rounded border text-[10px] font-mono flex items-center justify-center transition-all duration-150 relative ${cellBg} ${
+                        className={`w-[26px] h-[26px] sm:w-8 sm:h-8 md:w-10 md:h-10 rounded border text-[9px] sm:text-[10px] font-mono flex items-center justify-center transition-all duration-150 relative ${cellBg} ${
                           isFleetConfirmed ? 'cursor-not-allowed opacity-90' : 'cursor-pointer'
-                        }`}
+                        } ${focusRing}`}
                       >
                         {occupied && (
                           <div className="w-full h-full flex items-center justify-center font-bold uppercase text-[9px] sm:text-[10px] tracking-tight">
@@ -517,12 +583,11 @@ export const PlacementScreen: React.FC = () => {
               </span>
             ) : selectedShipType ? (
               <span>
-                Selected: <strong className="text-white uppercase">{selectedShipType}</strong>. Tap
-                any grid cell to place, or press <kbd className="px-1 py-0.5 bg-slate-800 rounded text-cyan-300">R</kbd> to rotate.
+                Selected: <strong className="text-white uppercase">{selectedShipType}</strong>. Tap or press <kbd className="px-1 py-0.5 bg-slate-800 rounded text-cyan-300">Enter</kbd> to place, or press <kbd className="px-1 py-0.5 bg-slate-800 rounded text-cyan-300">R</kbd> to rotate.
               </span>
             ) : (
               <span>
-                Click or drag ships from the Fleet Dock to deploy. Ships may touch but cannot overlap.
+                Click, drag, or use <kbd className="px-1 py-0.5 bg-slate-800 rounded text-cyan-300">1–5</kbd> + <kbd className="px-1 py-0.5 bg-slate-800 rounded text-cyan-300">Arrows</kbd> to deploy fleet. Press <kbd className="px-1 py-0.5 bg-slate-800 rounded text-cyan-300">C</kbd> to confirm.
               </span>
             )}
           </div>

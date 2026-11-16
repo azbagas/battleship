@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -44,26 +45,110 @@ func WithPingConfig(interval, timeout time.Duration) HandlerOption {
 	}
 }
 
+// WithAllowedOrigins configures authorized Origin patterns for WebSocket handshakes.
+// Passing []string{"*"} allows any origin (dev/testing mode).
+func WithAllowedOrigins(origins []string) HandlerOption {
+	return func(h *Handler) {
+		if len(origins) == 1 && origins[0] == "*" {
+			h.allowAllOrigins = true
+			h.originPatterns = nil
+			return
+		}
+		h.allowAllOrigins = false
+		h.originPatterns = origins
+	}
+}
+
+// WithMaxPayloadBytes configures the maximum allowed WebSocket message payload size in bytes.
+func WithMaxPayloadBytes(bytes int64) HandlerOption {
+	return func(h *Handler) {
+		if bytes > 0 {
+			h.maxPayloadBytes = bytes
+		}
+	}
+}
+
+// WithIPLimit configures the maximum concurrent connections allowed per IP address.
+func WithIPLimit(maxPerIP int) HandlerOption {
+	return func(h *Handler) {
+		h.ipTracker = NewIPTracker(maxPerIP)
+	}
+}
+
+// WithRateLimit configures the per-connection message rate limit (replenishment rate and burst capacity).
+func WithRateLimit(rate, burst float64) HandlerOption {
+	return func(h *Handler) {
+		h.rateLimit = rate
+		h.rateBurst = burst
+	}
+}
+
 // Handler manages WebSocket upgrades, handshake, and message dispatch.
 type Handler struct {
-	registry     *lobby.SessionRegistry
-	lobby        *lobby.LobbyManager
-	pingInterval time.Duration
-	pingTimeout  time.Duration
+	registry        *lobby.SessionRegistry
+	lobby           *lobby.LobbyManager
+	pingInterval    time.Duration
+	pingTimeout     time.Duration
+	originPatterns  []string
+	allowAllOrigins bool
+	maxPayloadBytes int64
+	rateLimit       float64
+	rateBurst       float64
+	ipTracker       *IPTracker
+	connsMu         sync.Mutex
+	activeConns     map[*websocket.Conn]struct{}
+	shuttingDown    atomic.Bool
 }
 
 // NewHandler constructs a WebSocket Handler backed by SessionRegistry and LobbyManager.
 func NewHandler(registry *lobby.SessionRegistry, lobbyMgr *lobby.LobbyManager, opts ...HandlerOption) *Handler {
 	h := &Handler{
-		registry:     registry,
-		lobby:        lobbyMgr,
-		pingInterval: 15 * time.Second,
-		pingTimeout:  5 * time.Second,
+		registry:        registry,
+		lobby:           lobbyMgr,
+		pingInterval:    15 * time.Second,
+		pingTimeout:     5 * time.Second,
+		originPatterns:  []string{"localhost:*", "127.0.0.1:*"},
+		allowAllOrigins: false,
+		maxPayloadBytes: 4096,
+		rateLimit:       10.0,
+		rateBurst:       20.0,
+		ipTracker:       NewIPTracker(10),
+		activeConns:     make(map[*websocket.Conn]struct{}),
 	}
 	for _, opt := range opts {
 		opt(h)
 	}
 	return h
+}
+
+// Shutdown initiates graceful shutdown: halts new upgrades and closes active connections.
+func (h *Handler) Shutdown(ctx context.Context) error {
+	h.shuttingDown.Store(true)
+
+	h.connsMu.Lock()
+	conns := make([]*websocket.Conn, 0, len(h.activeConns))
+	for c := range h.activeConns {
+		conns = append(conns, c)
+	}
+	h.connsMu.Unlock()
+
+	for _, c := range conns {
+		_ = c.Close(websocket.StatusGoingAway, "server shutting down")
+	}
+
+	return nil
+}
+
+func (h *Handler) registerConn(c *websocket.Conn) {
+	h.connsMu.Lock()
+	defer h.connsMu.Unlock()
+	h.activeConns[c] = struct{}{}
+}
+
+func (h *Handler) unregisterConn(c *websocket.Conn) {
+	h.connsMu.Lock()
+	defer h.connsMu.Unlock()
+	delete(h.activeConns, c)
 }
 
 // writeJSON serializes v as a JSON text frame and writes it to the WebSocket connection.
@@ -85,16 +170,35 @@ func sendError(sender *wsSender, code string, message string) error {
 
 // ServeHTTP handles the WebSocket upgrade and runs the connection lifecycle.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.shuttingDown.Load() {
+		http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
+		return
+	}
+
+	clientIP := ExtractIP(r)
+	if !h.ipTracker.Acquire(clientIP) {
+		slog.Warn("connection rejected: per-ip connection cap reached", "remoteAddr", r.RemoteAddr, "ip", clientIP)
+		http.Error(w, "Too many concurrent connections from your IP", http.StatusTooManyRequests)
+		return
+	}
+	defer h.ipTracker.Release(clientIP)
+
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true, // Origin verification is hardened in T-19.
+		OriginPatterns:     h.originPatterns,
+		InsecureSkipVerify: h.allowAllOrigins,
 	})
 	if err != nil {
-		slog.Error("failed to accept websocket connection", "remoteAddr", r.RemoteAddr, "error", err)
+		slog.Warn("failed to accept websocket connection", "remoteAddr", r.RemoteAddr, "error", err)
 		return
 	}
 	defer func() {
 		_ = conn.Close(websocket.StatusNormalClosure, "connection closed")
 	}()
+
+	h.registerConn(conn)
+	defer h.unregisterConn(conn)
+
+	conn.SetReadLimit(h.maxPayloadBytes)
 
 	slog.Debug("websocket connection accepted", "remoteAddr", r.RemoteAddr)
 
@@ -169,14 +273,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	limiter := NewRateLimiter(h.rateLimit, h.rateBurst)
+
 	// Message pump loop: read messages until disconnection.
 	for {
 		typ, msgBytes, err := conn.Read(r.Context())
 		if err != nil {
-			// Normal closure or network drop
+			// Normal closure, network drop, or read limit exceeded
 			break
 		}
 		if typ != websocket.MessageText {
+			continue
+		}
+
+		if !limiter.Allow() {
+			slog.Warn("rate limit exceeded", "playerId", player.ID, "remoteAddr", r.RemoteAddr)
+			_ = sendError(sender, ErrCodeRateLimited, "Message rate limit exceeded")
 			continue
 		}
 

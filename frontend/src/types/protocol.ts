@@ -235,6 +235,7 @@ export const ErrorCode = {
   GameOver: 'GAME_OVER',
   RematchNotAllowed: 'REMATCH_NOT_ALLOWED',
   NotInFinished: 'NOT_IN_FINISHED',
+  RateLimitExceeded: 'RATE_LIMIT_EXCEEDED',
 } as const
 
 export type ErrorCodeType = (typeof ErrorCode)[keyof typeof ErrorCode] | string

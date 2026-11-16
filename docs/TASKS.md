@@ -4,13 +4,13 @@
      Tag tasks with feature IDs. Each task has a "Done when" line. -->
 
 ## Current focus
-In progress: none (ready for T-19 [F-08])
+In progress: none (ready for T-21 [all])
 
 Blocked: nothing
 
 Known issues: none
 
-Next up: T-19 [F-08] Add backend security and operational hardening: WebSocket `Origin` check, per-connection message rate limiting and max payload size, per-IP connection cap, graceful `SIGTERM` shutdown, and `docs/protocol.md` specification.
+Next up: T-21 [all] Write two-client WebSocket integration tests (full game, reconnect, rematch, simultaneous join race) and a Playwright E2E test of two browsers completing a game.
 
 <!-- Update this block at the end of every session. If it passes ~15 lines, move it to STATUS.md. -->
 
@@ -73,9 +73,9 @@ Next up: T-19 [F-08] Add backend security and operational hardening: WebSocket `
   Done when: two players finishing a normal game can mutually accept a rematch or return to the lobby with clear status feedback.
 
 ### F-08 Responsive UX, Accessibility & Fair Play
-- [ ] T-19 [F-08] Add backend security and operational hardening: WebSocket `Origin` check, per-connection message rate limiting and max payload size, per-IP connection cap, graceful `SIGTERM` shutdown, and `docs/protocol.md` specification.
-  Done when: tests verify rate-limit/size/origin/IP rejections and graceful shutdown, and `docs/protocol.md` documents every client and server message schema.
-- [ ] T-20 [F-08] Polish frontend responsive layout (360 px mobile with primary target grid + own-fleet toggle up to desktop side-by-side grids), non-color hit/miss/sunk symbols/patterns, and desktop keyboard navigation (cell selection, rotation, confirmation).
+- [x] T-19 [F-08] Add backend security and operational hardening: WebSocket `Origin` check, per-connection message rate limiting and max payload size, per-IP connection cap, graceful `SIGTERM` shutdown, and `docs/PROTOCOL.md` specification.
+  Done when: tests verify rate-limit/size/origin/IP rejections and graceful shutdown, and `docs/PROTOCOL.md` documents every client and server message schema.
+- [x] T-20 [F-08] Polish frontend responsive layout (360 px mobile with primary target grid + own-fleet toggle up to desktop side-by-side grids), non-color hit/miss/sunk symbols/patterns, and desktop keyboard navigation (cell selection, rotation, confirmation).
   Done when: UI works cleanly at 360 px mobile and desktop widths, hit/miss/sunk states are distinguishable without color, and keyboard controls operate placement and firing.
 
 ### Wrap-up
@@ -111,6 +111,8 @@ Next up: T-19 [F-08] Add backend security and operational hardening: WebSocket `
 - 2026-11-11: T-17 implemented backend rematch orchestration (`rematch.accept`, `rematch.decline`, `rematch.offered`, `rematch.cancelled`). Rematch is permitted strictly after `all_sunk` match conclusions while both commanders remain connected; forfeit, disconnect timeout, and abandonment reject rematch requests with `REMATCH_NOT_ALLOWED`. Unilateral acceptance broadcasts `rematch.offered`; mutual acceptance resets fleet, boards, and shot logs, creates a new game record, and restarts directly into the 60s placement phase with turn re-randomization on battle start. Explicit decline, room departure, or connection drop immediately cancels any pending rematch offer and notifies the counterpart. Verified with unit and WebSocket integration tests (`-race`).
 - 2026-11-11: T-18 implemented the frontend Game Over screen (`GameOverScreen.tsx`) and complete rematch UX. Displays high-contrast victory/defeat debrief banners, match outcome reasons (hostile fleet destroyed, surrendered, disconnect grace timeout, or mutual abandonment), and combat statistics (total shots fired, hit accuracy %, ships sunk/lost). Rematch button is conditionally enabled exclusively after `all_sunk` finishes, with reactive waiting ("Rematch Offered — Waiting..."), opponent request ("Accept Rematch"), and cancelled notices. Surrender/forfeit or disconnect timeout cleanly hides the Rematch action and offers a direct "Back to Lobby" CTA. Routing integrated in `App.tsx` when `activeRoom.phase === 'finished'`. Verified with 15 frontend test suites (113 passing tests), clean ESLint, and zero TypeScript build errors.
 - 2026-11-11: Fixed active room capacity accounting and lobby subscriber synchronization: concluded matches (`PhaseFinished`) are excluded from active capacity counts per PRD F-02 ("10 total rooms (waiting or in-play)"), ensuring players returning to the lobby see 0 active rooms instead of ghost in-flight counts. Added `lobby.update` broadcasts on room deletion, departure, and match conclusions so all players in the lobby receive instant capacity updates and stay perfectly synchronized. Added unit tests `TestFinishedMatch_ReturnToLobbyActiveRoomsCountAndUpdate` and `TestFinishedMatch_OpponentDisconnectCleansUpRoom`.
+- 2026-11-12: T-19 implemented backend operational and security hardening: WebSocket origin verification via `AcceptOptions.OriginPatterns` (configurable via `ALLOWED_ORIGINS`), message payload read limits via `conn.SetReadLimit` (configurable via `MAX_PAYLOAD_BYTES`, default 32 KB), per-connection thread-safe token bucket rate limiter (configurable via `RATE_LIMIT_MESSAGES_PER_SEC` and `RATE_LIMIT_BURST`, default 10 msg/s with 20 burst), per-IP concurrent connection cap tracking IPv4 and IPv6 client addresses (configurable via `MAX_CONNS_PER_IP`, default 10 conns/IP), and graceful SIGTERM shutdown closing active sockets cleanly with code 1001 (`websocket.StatusGoingAway`) within a 5s drain window. Wire protocol fully specified in `docs/PROTOCOL.md`. Verified with race-enabled tests (`go test -race ./...`).
+- 2026-11-12: T-20 implemented frontend responsive layout polish and accessibility: 360 px mobile viewports supported across placement and combat with zero horizontal scrolling (compact 26px cells, reduced container padding, and mobile tabbed view for radar/fleet/combat log); colorblind-accessible tactical markers (miss `○`, hit `✕`, sunk `⚓` with high-contrast diagonal hatch pattern); full desktop keyboard controls for fleet placement (1-5 dock selector, Arrow navigation, R rotation, Enter placement, C confirmation) and combat salvo targeting (Arrow navigation, Enter/Space fire) with roving tab indices and focus reticles. Verified with 15 test suites (117 tests passing), clean ESLint, and production Vite build.
 
 ## Archive
 <!-- Move finished version groups here as one-line summaries, e.g. "v1 shipped: F-01 to F-03." -->

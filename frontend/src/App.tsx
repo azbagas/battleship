@@ -47,7 +47,7 @@ export const App: React.FC = () => {
   return (
     <SessionProvider>
       <LobbyProvider>
-        <main className="min-h-screen bg-slate-950 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black text-slate-100 flex flex-col items-center justify-center p-4 selection:bg-cyan-500/30 selection:text-cyan-200">
+        <main className="min-h-screen bg-slate-950 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black text-slate-100 flex flex-col items-center justify-center p-2 sm:p-4 md:p-6 selection:bg-cyan-500/30 selection:text-cyan-200">
           <AppContent />
         </main>
       </LobbyProvider>

@@ -171,4 +171,5 @@ const (
 	ErrCodeNotInFinished        = "NOT_IN_FINISHED"
 	ErrCodeRematchNotAllowed    = "REMATCH_NOT_ALLOWED"
 	ErrCodeOpponentNotPresent   = "OPPONENT_NOT_PRESENT"
+	ErrCodeRateLimited          = "RATE_LIMIT_EXCEEDED"
 )

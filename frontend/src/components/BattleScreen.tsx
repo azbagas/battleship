@@ -3,7 +3,7 @@ import { useLobby } from '../context/LobbyContext'
 import { useSession } from '../context/SessionContext'
 import { ConnectionBadge } from './ConnectionBadge'
 import { OpponentDisconnectBanner } from './OpponentDisconnectBanner'
-import { PlacedShip, ShipType } from '../types/protocol'
+import { Coord, PlacedShip, ShipType } from '../types/protocol'
 import {
   COLUMN_LABELS,
   ROW_LABELS,
@@ -41,6 +41,8 @@ export const BattleScreen: React.FC = () => {
   const [secondsRemaining, setSecondsRemaining] = useState<number>(30)
   // Surrender confirmation modal
   const [showSurrenderConfirm, setShowSurrenderConfirm] = useState<boolean>(false)
+  // Focused coordinate for keyboard navigation on target grid
+  const [focusedTargetCoord, setFocusedTargetCoord] = useState<Coord>({ x: 0, y: 0 })
 
   // Countdown timer derived from turnDeadline
   useEffect(() => {
@@ -150,8 +152,52 @@ export const BattleScreen: React.FC = () => {
   const isTimerUrgent = secondsRemaining <= 10 && !isMatchOver
   const timerPercentage = Math.min(100, Math.max(0, (secondsRemaining / 30) * 100))
 
+  // Keyboard navigation on target radar: Arrow keys navigate reticle, Enter/Space fires
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (gameOverResult || activeRoom?.phase === 'finished') return
+
+      const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase()
+      if (targetTag === 'input' || targetTag === 'textarea') return
+
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setFocusedTargetCoord((c) => ({ ...c, y: Math.max(0, c.y - 1) }))
+        return
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setFocusedTargetCoord((c) => ({ ...c, y: Math.min(9, c.y + 1) }))
+        return
+      }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        setFocusedTargetCoord((c) => ({ ...c, x: Math.max(0, c.x - 1) }))
+        return
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        setFocusedTargetCoord((c) => ({ ...c, x: Math.min(9, c.x + 1) }))
+        return
+      }
+
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        const cellKey = `${focusedTargetCoord.x},${focusedTargetCoord.y}`
+        const alreadyTargeted = targetShots.has(cellKey)
+        if (isMyTurn && !alreadyTargeted && !isMatchOver) {
+          handleTargetCellClick(focusedTargetCoord.x, focusedTargetCoord.y)
+        }
+        return
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [gameOverResult, activeRoom?.phase, isMyTurn, isMatchOver, focusedTargetCoord, targetShots, handleTargetCellClick])
+
   return (
-    <div className="w-full max-w-6xl mx-auto flex flex-col gap-4">
+    <div className="w-full max-w-6xl mx-auto px-1 sm:px-4 py-3 sm:py-4 flex flex-col gap-4">
       {/* Self Reconnecting Notice Banner */}
       {(connectionStatus === 'connecting' || connectionStatus === 'disconnected') && (
         <div
@@ -453,7 +499,7 @@ export const BattleScreen: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Primary Target Radar Grid (Left on desktop) */}
         <div
-          className={`lg:col-span-7 p-4 sm:p-5 rounded-2xl bg-slate-900/70 border border-slate-800 shadow-xl backdrop-blur-sm ${
+          className={`lg:col-span-7 p-2.5 sm:p-4 md:p-5 rounded-2xl bg-slate-900/70 border border-slate-800 shadow-xl backdrop-blur-sm ${
             activeMobileTab !== 'target' ? 'hidden lg:block' : 'block'
           }`}
         >
@@ -472,11 +518,11 @@ export const BattleScreen: React.FC = () => {
           {/* Radar Tactical Grid */}
           <div className="relative inline-block select-none overflow-x-auto max-w-full">
             {/* Column Headers A-J */}
-            <div className="flex ml-6 sm:ml-7 mb-1">
+            <div className="flex ml-5 sm:ml-7 mb-1">
               {COLUMN_LABELS.map((col) => (
                 <div
                   key={col}
-                  className="w-7 h-6 sm:w-9 sm:h-7 flex items-center justify-center text-[10px] sm:text-xs font-mono font-bold text-slate-400"
+                  className="w-[26px] h-5 sm:w-8 sm:h-6 md:w-9 md:h-7 flex items-center justify-center text-[10px] sm:text-xs font-mono font-bold text-slate-400"
                 >
                   {col}
                 </div>
@@ -484,9 +530,9 @@ export const BattleScreen: React.FC = () => {
             </div>
 
             {/* Grid Rows */}
-            <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-0.5 sm:gap-1">
               {ROW_LABELS.map((row, y) => (
-                <div key={row} className="flex items-center gap-1">
+                <div key={row} className="flex items-center gap-0.5 sm:gap-1">
                   {/* Row Label 1-10 */}
                   <div className="w-5 sm:w-6 text-right pr-1 sm:pr-2 text-[10px] sm:text-xs font-mono font-bold text-slate-400">
                     {row}
@@ -503,6 +549,14 @@ export const BattleScreen: React.FC = () => {
                     const isSunk = Boolean(sunkShipType || shotResult === 'sunk')
                     const isHit = shotResult === 'hit' || isSunk
                     const isMiss = shotResult === 'miss'
+                    const isFocused = focusedTargetCoord.x === x && focusedTargetCoord.y === y
+                    const focusRing = isFocused ? 'ring-2 ring-cyan-400 ring-offset-1 ring-offset-slate-950 z-10' : ''
+                    const sunkPatternStyle = isSunk
+                      ? {
+                          backgroundImage:
+                            'repeating-linear-gradient(45deg, rgba(225, 29, 72, 0.4), rgba(225, 29, 72, 0.4) 3px, rgba(136, 19, 55, 0.9) 3px, rgba(136, 19, 55, 0.9) 6px)',
+                        }
+                      : undefined
 
                     let cellStyle =
                       'bg-slate-950/70 border-slate-800/80 text-slate-500'
@@ -511,32 +565,32 @@ export const BattleScreen: React.FC = () => {
 
                     if (isSunk) {
                       cellStyle =
-                        'bg-rose-950/90 border-rose-600 text-rose-300 font-bold shadow-inner shadow-rose-900/50'
+                        'bg-rose-950/90 border-rose-500 text-rose-200 font-bold shadow-inner'
                       cellContent = (
-                        <div className="flex flex-col items-center justify-center">
-                          <span className="text-[11px] sm:text-xs leading-none">✕</span>
-                          <span className="text-[7px] font-mono leading-none uppercase mt-0.5">
-                            {sunkShipType ? sunkShipType.slice(0, 1) : ''}
+                        <div className="flex flex-col items-center justify-center leading-none">
+                          <span className="text-[10px] sm:text-xs">⚓</span>
+                          <span className="text-[7px] font-mono leading-none uppercase font-black text-rose-200">
+                            {sunkShipType ? sunkShipType.slice(0, 1) : '✕'}
                           </span>
                         </div>
                       )
-                      ariaLabel = `Target cell ${notation}, SUNK ${sunkShipType || 'ship'}`
+                      ariaLabel = `Target cell ${notation}, SUNK ${sunkShipType || 'vessel'} (diagonal striped)`
                     } else if (isHit) {
                       cellStyle =
-                        'bg-rose-600/30 border-rose-500 text-rose-300 font-black animate-pulse'
+                        'bg-rose-600/30 border-rose-500 text-rose-200 font-black animate-pulse'
                       cellContent = <span className="text-xs sm:text-sm leading-none">✕</span>
-                      ariaLabel = `Target cell ${notation}, HIT`
+                      ariaLabel = `Target cell ${notation}, HIT (vessel damaged)`
                     } else if (isMiss) {
                       cellStyle =
-                        'bg-slate-900/90 border-slate-800 text-cyan-400/90 font-bold'
-                      cellContent = <span className="text-xs sm:text-sm leading-none">•</span>
-                      ariaLabel = `Target cell ${notation}, MISS`
+                        'bg-slate-900/90 border-slate-700 text-cyan-300 font-bold'
+                      cellContent = <span className="text-xs sm:text-sm leading-none">○</span>
+                      ariaLabel = `Target cell ${notation}, MISS (water splash)`
                     } else {
                       // Untargeted
                       if (isMyTurn && !isMatchOver) {
                         cellStyle =
                           'bg-slate-950/70 border-slate-800 hover:border-cyan-400 hover:bg-cyan-500/20 text-cyan-300 cursor-crosshair active:scale-95'
-                        ariaLabel = `Target cell ${notation}, ready to fire`
+                        ariaLabel = `Target cell ${notation}, ready to fire${isFocused ? ' (press Enter or Space to fire)' : ''}`
                       } else {
                         cellStyle =
                           'bg-slate-950/40 border-slate-900 text-slate-700 cursor-not-allowed opacity-75'
@@ -548,10 +602,13 @@ export const BattleScreen: React.FC = () => {
                       <button
                         key={cellKey}
                         type="button"
+                        tabIndex={isFocused ? 0 : -1}
+                        onFocus={() => setFocusedTargetCoord({ x, y })}
                         aria-label={ariaLabel}
                         onClick={() => handleTargetCellClick(x, y)}
                         disabled={isTargeted || !isMyTurn || isMatchOver}
-                        className={`w-7 h-7 sm:w-9 sm:h-9 rounded border flex items-center justify-center font-mono transition-all duration-150 relative ${cellStyle}`}
+                        style={sunkPatternStyle}
+                        className={`w-[26px] h-[26px] sm:w-8 sm:h-8 md:w-9 md:h-9 rounded border flex items-center justify-center font-mono transition-all duration-150 relative ${cellStyle} ${focusRing}`}
                       >
                         {cellContent}
                       </button>
@@ -565,18 +622,27 @@ export const BattleScreen: React.FC = () => {
           <div className="mt-3 flex items-center justify-between text-xs text-slate-400 font-mono">
             <div className="flex items-center gap-3">
               <span className="inline-flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-cyan-400" /> • Miss
+                <span className="w-2.5 h-2.5 rounded-full border border-cyan-400 flex items-center justify-center text-[8px] text-cyan-300">○</span> Miss
               </span>
               <span className="inline-flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-rose-500" /> ✕ Hit
+                <span className="w-2.5 h-2.5 rounded bg-rose-500/40 border border-rose-500 flex items-center justify-center text-[8px] text-rose-200">✕</span> Hit
               </span>
               <span className="inline-flex items-center gap-1">
-                <span className="w-2 h-2 rounded bg-rose-900 border border-rose-600" /> Sunk
+                <span
+                  className="w-3.5 h-2.5 rounded border border-rose-600 flex items-center justify-center text-[8px] text-rose-200"
+                  style={{
+                    backgroundImage:
+                      'repeating-linear-gradient(45deg, rgba(225, 29, 72, 0.4), rgba(225, 29, 72, 0.4) 2px, rgba(136, 19, 55, 0.85) 2px, rgba(136, 19, 55, 0.85) 4px)',
+                  }}
+                >
+                  ⚓
+                </span>
+                Sunk (striped)
               </span>
             </div>
             {isMyTurn && !isMatchOver && (
               <span className="text-emerald-400 font-semibold animate-pulse hidden sm:inline">
-                Click grid to launch salvo
+                Click grid or press Enter to fire salvo
               </span>
             )}
           </div>
@@ -586,7 +652,7 @@ export const BattleScreen: React.FC = () => {
         <div className="lg:col-span-5 flex flex-col gap-4">
           {/* Defensive Fleet Grid */}
           <div
-            className={`p-4 sm:p-5 rounded-2xl bg-slate-900/70 border border-slate-800 shadow-xl backdrop-blur-sm ${
+            className={`p-2.5 sm:p-4 md:p-5 rounded-2xl bg-slate-900/70 border border-slate-800 shadow-xl backdrop-blur-sm ${
               activeMobileTab !== 'defense' ? 'hidden lg:block' : 'block'
             }`}
           >
@@ -605,11 +671,11 @@ export const BattleScreen: React.FC = () => {
             {/* Defensive Tactical Grid */}
             <div className="relative inline-block select-none overflow-x-auto max-w-full">
               {/* Column Headers A-J */}
-              <div className="flex ml-6 sm:ml-7 mb-1">
+              <div className="flex ml-5 sm:ml-7 mb-1">
                 {COLUMN_LABELS.map((col) => (
                   <div
                     key={col}
-                    className="w-7 h-6 sm:w-8 sm:h-7 flex items-center justify-center text-[10px] sm:text-xs font-mono font-bold text-slate-400"
+                    className="w-[26px] h-5 sm:w-8 sm:h-6 md:w-8 md:h-7 flex items-center justify-center text-[10px] sm:text-xs font-mono font-bold text-slate-400"
                   >
                     {col}
                   </div>
@@ -617,9 +683,9 @@ export const BattleScreen: React.FC = () => {
               </div>
 
               {/* Grid Rows */}
-              <div className="flex flex-col gap-1">
+              <div className="flex flex-col gap-0.5 sm:gap-1">
                 {ROW_LABELS.map((row, y) => (
-                  <div key={row} className="flex items-center gap-1">
+                  <div key={row} className="flex items-center gap-0.5 sm:gap-1">
                     {/* Row Label 1-10 */}
                     <div className="w-5 sm:w-6 text-right pr-1 sm:pr-2 text-[10px] sm:text-xs font-mono font-bold text-slate-400">
                       {row}
@@ -632,6 +698,12 @@ export const BattleScreen: React.FC = () => {
                       const occupied = ownOccupiedMap.get(cellKey)
                       const shotResult = ownShots.get(cellKey)
                       const isSunk = Boolean(ownSunkCellMap.get(cellKey))
+                      const sunkPatternStyle = isSunk
+                        ? {
+                            backgroundImage:
+                              'repeating-linear-gradient(45deg, rgba(225, 29, 72, 0.4), rgba(225, 29, 72, 0.4) 3px, rgba(136, 19, 55, 0.9) 3px, rgba(136, 19, 55, 0.9) 6px)',
+                          }
+                        : undefined
 
                       let cellStyle = 'bg-slate-950/60 border-slate-850'
                       let cellContent: React.ReactNode = null
@@ -640,16 +712,16 @@ export const BattleScreen: React.FC = () => {
                       if (occupied) {
                         if (isSunk) {
                           cellStyle =
-                            'bg-rose-950/90 border-rose-600 text-rose-300 font-bold'
+                            'bg-rose-950/90 border-rose-500 text-rose-200 font-bold'
                           cellContent = (
                             <div className="flex flex-col items-center justify-center leading-none">
-                              <span className="text-[10px]">✕</span>
-                              <span className="text-[7px] uppercase font-mono">
+                              <span className="text-[10px]">⚓</span>
+                              <span className="text-[7px] uppercase font-mono font-black text-rose-200">
                                 {occupied.ship.type.slice(0, 1)}
                               </span>
                             </div>
                           )
-                          ariaLabel = `Defensive cell ${notation}, SUNK ${occupied.ship.type}`
+                          ariaLabel = `Defensive cell ${notation}, SUNK ${occupied.ship.type} (diagonal striped)`
                         } else if (shotResult === 'hit') {
                           cellStyle =
                             'bg-rose-600/40 border-rose-500 text-rose-200 font-black animate-pulse'
@@ -668,8 +740,8 @@ export const BattleScreen: React.FC = () => {
                       } else {
                         // Empty water cell
                         if (shotResult === 'miss') {
-                          cellStyle = 'bg-slate-900 border-slate-800 text-slate-400'
-                          cellContent = <span className="text-xs leading-none">•</span>
+                          cellStyle = 'bg-slate-900 border-slate-700 text-cyan-300 font-bold'
+                          cellContent = <span className="text-xs leading-none">○</span>
                           ariaLabel = `Defensive cell ${notation}, enemy miss`
                         } else {
                           cellStyle = 'bg-slate-950/40 border-slate-900 text-slate-700'
@@ -680,7 +752,8 @@ export const BattleScreen: React.FC = () => {
                         <div
                           key={cellKey}
                           aria-label={ariaLabel}
-                          className={`w-7 h-7 sm:w-8 sm:h-8 rounded border flex items-center justify-center font-mono ${cellStyle}`}
+                          style={sunkPatternStyle}
+                          className={`w-[26px] h-[26px] sm:w-8 sm:h-8 md:w-8 md:h-8 rounded border flex items-center justify-center font-mono ${cellStyle}`}
                         >
                           {cellContent}
                         </div>

@@ -224,4 +224,38 @@ describe('PlacementScreen', () => {
     expect(screen.getByText(/CONNECTION DROPPED/i)).toBeDefined()
     expect(screen.getByText(/Captain Bravo is offline/i)).toBeDefined()
   })
+
+  it('supports selecting ship via number key, moving reticle via Arrow keys, and placing via Enter', () => {
+    const lobby = createMockLobby()
+    renderComponent(lobby)
+
+    // Select Destroyer via '5' key
+    fireEvent.keyDown(window, { key: '5' })
+
+    // Move reticle to B2 {x: 1, y: 1}
+    fireEvent.keyDown(window, { key: 'ArrowRight' })
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+
+    // Place ship at B2 using Enter
+    fireEvent.keyDown(window, { key: 'Enter' })
+
+    // Verify cell B2 shows Destroyer placed
+    const cellB2 = screen.getByLabelText(/Cell B2, destroyer/i)
+    expect(cellB2).toBeDefined()
+  })
+
+  it('supports confirming fleet via C keyboard shortcut when fleet is complete', () => {
+    const submitFleetMock = vi.fn()
+    const lobby = createMockLobby({ submitFleet: submitFleetMock })
+    renderComponent(lobby)
+
+    // Randomize fleet first so all 5 ships are placed
+    const randomizeBtn = screen.getByRole('button', { name: /Randomize/i })
+    fireEvent.click(randomizeBtn)
+
+    // Press 'C' key to confirm
+    fireEvent.keyDown(window, { key: 'c' })
+
+    expect(submitFleetMock).toHaveBeenCalledTimes(1)
+  })
 })

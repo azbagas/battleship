@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -25,6 +26,18 @@ func setupTestServer(t *testing.T, opts ...lobby.Option) (*httptest.Server, *lob
 		server.Close()
 	})
 	return server, reg, mgr
+}
+
+func setupTestServerWithHandlerOpts(t *testing.T, handlerOpts []HandlerOption, lobbyOpts ...lobby.Option) (*httptest.Server, *lobby.SessionRegistry, *lobby.LobbyManager, *Handler) {
+	t.Helper()
+	reg := lobby.NewSessionRegistry()
+	mgr := lobby.NewLobbyManager(reg, lobbyOpts...)
+	handler := NewHandler(reg, mgr, handlerOpts...)
+	server := httptest.NewServer(handler)
+	t.Cleanup(func() {
+		server.Close()
+	})
+	return server, reg, mgr, handler
 }
 
 func dialWS(t *testing.T, ctx context.Context, serverURL string) *websocket.Conn {
@@ -1474,4 +1487,200 @@ func TestHandler_RematchFlow(t *testing.T) {
 	}
 
 	_ = playerGuest
+}
+
+func TestHandler_OriginCheck(t *testing.T) {
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{
+		WithAllowedOrigins([]string{"authorized.example.com"}),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	// 1. Connection with unauthorized origin should be rejected with 403
+	_, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Origin": []string{"http://unauthorized.evil.com"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected unauthorized origin to be rejected, but dial succeeded")
+	}
+	if resp != nil && resp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected status 403 Forbidden for unauthorized origin, got %d", resp.StatusCode)
+	}
+
+	// 2. Connection with authorized origin should succeed
+	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Origin": []string{"http://authorized.example.com"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected authorized origin dial to succeed, got %v", err)
+	}
+	_ = conn.Close(websocket.StatusNormalClosure, "done")
+
+	// 3. Connection with wildcard origin configured
+	serverWildcard, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{
+		WithAllowedOrigins([]string{"*"}),
+	})
+	wsURLWildcard := "ws" + strings.TrimPrefix(serverWildcard.URL, "http")
+
+	connW, _, err := websocket.Dial(ctx, wsURLWildcard, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Origin": []string{"http://any-domain.com"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected wildcard origin dial to succeed, got %v", err)
+	}
+	_ = connW.Close(websocket.StatusNormalClosure, "done")
+}
+
+func TestHandler_MaxPayloadSize(t *testing.T) {
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{
+		WithAllowedOrigins([]string{"*"}),
+		WithMaxPayloadBytes(128),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Handshake with a short name fits within 128 bytes
+	conn, _, _ := connectAndHandshake(t, ctx, server.URL, "Short", "")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Send an oversized payload (> 128 bytes)
+	hugeData := strings.Repeat("X", 256)
+	hugeMsg := OutboundMessage{
+		Type: TypeLobbyJoin,
+		Payload: map[string]string{
+			"roomId": hugeData,
+		},
+	}
+	err := writeJSON(ctx, conn, hugeMsg)
+	if err != nil {
+		t.Fatalf("failed to send huge message: %v", err)
+	}
+
+	// The next read should return an error because the server closed with StatusMessageTooBig
+	_, _, readErr := conn.Read(ctx)
+	if readErr == nil {
+		t.Fatal("expected read to fail after sending oversized message, but it succeeded")
+	}
+	t.Logf("connection closed as expected on oversized message: %v", readErr)
+}
+
+func TestHandler_RateLimiting(t *testing.T) {
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{
+		WithAllowedOrigins([]string{"*"}),
+		WithRateLimit(1.0, 1.0), // 1 msg/sec with burst 1
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, _ := connectAndHandshake(t, ctx, server.URL, "RateTest", "")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Send 5 rapid messages
+	for i := 0; i < 5; i++ {
+		_ = writeJSON(ctx, conn, OutboundMessage{
+			Type:    TypeLobbyCreate,
+			Payload: map[string]any{},
+		})
+	}
+
+	// Read responses: at least one should be RATE_LIMIT_EXCEEDED
+	sawRateLimitError := false
+	for i := 0; i < 5; i++ {
+		readCtx, readCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		typ, payload := readEnvelope(t, readCtx, conn)
+		readCancel()
+
+		if typ == TypeError {
+			var errPayload ErrorPayload
+			if err := json.Unmarshal(payload, &errPayload); err == nil {
+				if errPayload.Code == ErrCodeRateLimited {
+					sawRateLimitError = true
+					break
+				}
+			}
+		}
+	}
+
+	if !sawRateLimitError {
+		t.Error("expected at least one RATE_LIMIT_EXCEEDED error envelope, but none was received")
+	}
+}
+
+func TestHandler_PerIPConnectionCap(t *testing.T) {
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{
+		WithAllowedOrigins([]string{"*"}),
+		WithIPLimit(2),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Connect 1st client
+	conn1, _, _ := connectAndHandshake(t, ctx, server.URL, "Player1", "")
+	defer func() { _ = conn1.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Connect 2nd client
+	conn2, _, _ := connectAndHandshake(t, ctx, server.URL, "Player2", "")
+	defer func() { _ = conn2.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Attempt 3rd client from same IP -> should be rejected with 429 Too Many Requests
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	_, resp, err := websocket.Dial(ctx, wsURL, nil)
+	if err == nil {
+		t.Fatal("expected 3rd connection to be rejected by per-IP cap, but dial succeeded")
+	}
+	if resp != nil && resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("expected status 429 Too Many Requests, got %d", resp.StatusCode)
+	}
+
+	// Close conn1 and verify capacity frees up
+	_ = conn1.Close(websocket.StatusNormalClosure, "done")
+	time.Sleep(50 * time.Millisecond) // allow handler cleanup
+
+	// Now 3rd client should succeed
+	conn3, _, _ := connectAndHandshake(t, ctx, server.URL, "Player3", "")
+	defer func() { _ = conn3.Close(websocket.StatusNormalClosure, "done") }()
+}
+
+func TestHandler_GracefulShutdown(t *testing.T) {
+	server, _, _, handler := setupTestServerWithHandlerOpts(t, []HandlerOption{
+		WithAllowedOrigins([]string{"*"}),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, _ := connectAndHandshake(t, ctx, server.URL, "ShutdownPlayer", "")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Initiate handler shutdown
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer shutdownCancel()
+
+	if err := handler.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("handler.Shutdown returned error: %v", err)
+	}
+
+	// Connected client should see connection closed with StatusGoingAway
+	_, _, readErr := conn.Read(ctx)
+	if readErr == nil {
+		t.Fatal("expected read to fail after server shutdown, but it succeeded")
+	}
+	t.Logf("connection closed on shutdown with error: %v (status: %v)", readErr, websocket.CloseStatus(readErr))
+
+	// New connection attempt while shutting down should be rejected with 503
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	_, resp, err := websocket.Dial(ctx, wsURL, nil)
+	if err == nil {
+		t.Fatal("expected new connection to be rejected during shutdown, but dial succeeded")
+	}
+	if resp != nil && resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected status 503 Service Unavailable, got %d", resp.StatusCode)
+	}
 }

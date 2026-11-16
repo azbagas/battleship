@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,11 +25,13 @@ type HealthResponse struct {
 }
 
 // routes sets up and returns the HTTP mux for the server.
-func routes(registry *lobby.SessionRegistry, lobbyMgr *lobby.LobbyManager) http.Handler {
+func routes(registry *lobby.SessionRegistry, lobbyMgr *lobby.LobbyManager, wsHandler *ws.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthzHandler)
 
-	wsHandler := ws.NewHandler(registry, lobbyMgr)
+	if wsHandler == nil {
+		wsHandler = ws.NewHandler(registry, lobbyMgr)
+	}
 	mux.Handle("/ws", wsHandler)
 
 	return mux
@@ -100,9 +103,52 @@ func main() {
 
 	sessionRegistry := lobby.NewSessionRegistry()
 	lobbyManager := lobby.NewLobbyManager(sessionRegistry, lobby.WithStore(gameStore))
+
+	var wsOpts []ws.HandlerOption
+	if allowedOriginsStr := os.Getenv("ALLOWED_ORIGINS"); allowedOriginsStr != "" {
+		parts := strings.Split(allowedOriginsStr, ",")
+		var origins []string
+		for _, p := range parts {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				origins = append(origins, trimmed)
+			}
+		}
+		if len(origins) > 0 {
+			wsOpts = append(wsOpts, ws.WithAllowedOrigins(origins))
+		}
+	}
+
+	if maxPayloadStr := os.Getenv("MAX_PAYLOAD_BYTES"); maxPayloadStr != "" {
+		if bytes, err := strconv.ParseInt(maxPayloadStr, 10, 64); err == nil && bytes > 0 {
+			wsOpts = append(wsOpts, ws.WithMaxPayloadBytes(bytes))
+		}
+	}
+
+	if maxConnsIPStr := os.Getenv("MAX_CONNS_PER_IP"); maxConnsIPStr != "" {
+		if maxConns, err := strconv.Atoi(maxConnsIPStr); err == nil && maxConns > 0 {
+			wsOpts = append(wsOpts, ws.WithIPLimit(maxConns))
+		}
+	}
+
+	rateLimit := 10.0
+	rateBurst := 20.0
+	if rateStr := os.Getenv("RATE_LIMIT_MESSAGES_PER_SEC"); rateStr != "" {
+		if r, err := strconv.ParseFloat(rateStr, 64); err == nil && r > 0 {
+			rateLimit = r
+		}
+	}
+	if burstStr := os.Getenv("RATE_LIMIT_BURST"); burstStr != "" {
+		if b, err := strconv.ParseFloat(burstStr, 64); err == nil && b > 0 {
+			rateBurst = b
+		}
+	}
+	wsOpts = append(wsOpts, ws.WithRateLimit(rateLimit, rateBurst))
+
+	wsHandler := ws.NewHandler(sessionRegistry, lobbyManager, wsOpts...)
+
 	srv := &http.Server{
 		Addr:         addr,
-		Handler:      routes(sessionRegistry, lobbyManager),
+		Handler:      routes(sessionRegistry, lobbyManager, wsHandler),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -124,6 +170,10 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	if err := wsHandler.Shutdown(shutdownCtx); err != nil {
+		slog.Error("error shutting down websocket handler", "error", err)
+	}
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("server forced to shutdown", "error", err)

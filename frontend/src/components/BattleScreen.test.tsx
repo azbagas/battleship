@@ -207,16 +207,17 @@ describe('BattleScreen', () => {
     // Miss on C3
     const cellC3 = screen.getByRole('button', { name: /Target cell C3, MISS/i })
     expect(cellC3).toBeDefined()
-    expect(cellC3.textContent).toContain('•')
+    expect(cellC3.textContent).toContain('○')
 
     // Hit on A1
     const cellA1 = screen.getByRole('button', { name: /Target cell A1, HIT/i })
     expect(cellA1).toBeDefined()
     expect(cellA1.textContent).toContain('✕')
 
-    // Sunk on E5
+    // Sunk on E5 with anchor symbol and striped pattern
     const cellE5 = screen.getByRole('button', { name: /Target cell E5, SUNK destroyer/i })
     expect(cellE5).toBeDefined()
+    expect(cellE5.textContent).toContain('⚓')
   })
 
   it('renders defensive grid with own placed ships and incoming shots', () => {
@@ -332,6 +333,42 @@ describe('BattleScreen', () => {
 
     expect(screen.getByText(/CONNECTION DROPPED/i)).toBeDefined()
     expect(screen.getByText(/Captain Bravo is offline/i)).toBeDefined()
+  })
+
+  it('supports desktop keyboard navigation and firing salvo via Enter', () => {
+    const fireShotMock = vi.fn()
+    const lobby = createMockLobby({ isMyTurn: true, fireShot: fireShotMock })
+    renderComponent(lobby)
+
+    // Move reticle from A1 {x: 0, y: 0} to B2 {x: 1, y: 1}
+    fireEvent.keyDown(window, { key: 'ArrowRight' })
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+
+    // Press Enter to fire salvo
+    fireEvent.keyDown(window, { key: 'Enter' })
+
+    expect(fireShotMock).toHaveBeenCalledWith({ x: 1, y: 1 })
+  })
+
+  it('allows mobile tab switching between target radar, own fleet, and tactical log', () => {
+    const lobby = createMockLobby({ isMyTurn: false })
+    renderComponent(lobby)
+
+    const ownFleetTab = screen.getByRole('button', { name: /Own Fleet/i })
+    const logTab = screen.getByRole('button', { name: /Log/i })
+    const targetTab = screen.getByRole('button', { name: /Target Radar/i })
+
+    // Switch to own fleet
+    fireEvent.click(ownFleetTab)
+    expect(ownFleetTab.className).toContain('text-cyan-300')
+
+    // Switch to log
+    fireEvent.click(logTab)
+    expect(logTab.className).toContain('text-cyan-300')
+
+    // Switch back to target
+    fireEvent.click(targetTab)
+    expect(targetTab.className).toContain('text-cyan-300')
   })
 })
 

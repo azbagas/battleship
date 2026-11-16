@@ -15,7 +15,7 @@ func TestHealthzEndpoint(t *testing.T) {
 
 	reg := lobby.NewSessionRegistry()
 	mgr := lobby.NewLobbyManager(reg)
-	handler := routes(reg, mgr)
+	handler := routes(reg, mgr, nil)
 	handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
@@ -43,7 +43,7 @@ func TestHealthzMethodNotAllowed(t *testing.T) {
 
 	reg := lobby.NewSessionRegistry()
 	mgr := lobby.NewLobbyManager(reg)
-	handler := routes(reg, mgr)
+	handler := routes(reg, mgr, nil)
 	handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusMethodNotAllowed {
@@ -57,7 +57,7 @@ func TestWSEndpoint_NonWebSocketRequest(t *testing.T) {
 
 	reg := lobby.NewSessionRegistry()
 	mgr := lobby.NewLobbyManager(reg)
-	handler := routes(reg, mgr)
+	handler := routes(reg, mgr, nil)
 	handler.ServeHTTP(rr, req)
 
 	// Since it's a plain GET request without WebSocket upgrade headers,
