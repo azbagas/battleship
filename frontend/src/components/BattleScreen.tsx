@@ -3,6 +3,7 @@ import { useLobby } from '../context/LobbyContext'
 import { useSession } from '../context/SessionContext'
 import { ConnectionBadge } from './ConnectionBadge'
 import { OpponentDisconnectBanner } from './OpponentDisconnectBanner'
+import { GridShipOverlay, ShipSvg } from './ShipSvg'
 import { Coord, PlacedShip, ShipType } from '../types/protocol'
 import {
   COLUMN_LABELS,
@@ -11,6 +12,7 @@ import {
   SHIP_SIZES,
   getShipCells,
   coordToNotation,
+  sunkShipToPlacedShip,
 } from '../utils/placement'
 
 export const BattleScreen: React.FC = () => {
@@ -122,6 +124,13 @@ export const BattleScreen: React.FC = () => {
   const ownSunkShipTypes = useMemo(() => {
     return new Set(ownSunkShips.map((s) => s.type))
   }, [ownSunkShips])
+
+  // Reconstructed PlacedShip list for sunk opponent vessels revealed on the Target Radar
+  const revealedOpponentShips = useMemo(() => {
+    return opponentSunkShips
+      .map((sunk) => sunkShipToPlacedShip(sunk))
+      .filter((s): s is PlacedShip => s !== null)
+  }, [opponentSunkShips])
 
   // Handle cell click on target radar
   const handleTargetCellClick = useCallback(
@@ -387,6 +396,23 @@ export const BattleScreen: React.FC = () => {
                   }`}
                 >
                   <div className="text-[11px] font-mono font-bold truncate">{ship.name}</div>
+                  <div className="my-1.5 h-3.5 flex items-center justify-center px-1">
+                    <div
+                      style={{
+                        width: `${(ship.size / 5) * 100}%`,
+                        maxWidth: `${ship.size * 14}px`,
+                        height: '14px',
+                      }}
+                      className="flex items-center justify-center"
+                    >
+                      <ShipSvg
+                        type={ship.type}
+                        orientation="horizontal"
+                        variant={isSunk ? 'sunk' : hitsOnShip > 0 ? 'damaged' : 'deployed'}
+                        className="w-full h-full"
+                      />
+                    </div>
+                  </div>
                   <div className="flex items-center justify-center gap-1 mt-1">
                     {Array.from({ length: ship.size }).map((_, i) => (
                       <span
@@ -434,6 +460,23 @@ export const BattleScreen: React.FC = () => {
                   }`}
                 >
                   <div className="text-[11px] font-mono font-bold truncate">{ship.name}</div>
+                  <div className="my-1.5 h-3.5 flex items-center justify-center px-1">
+                    <div
+                      style={{
+                        width: `${(ship.size / 5) * 100}%`,
+                        maxWidth: `${ship.size * 14}px`,
+                        height: '14px',
+                      }}
+                      className="flex items-center justify-center"
+                    >
+                      <ShipSvg
+                        type={ship.type}
+                        orientation="horizontal"
+                        variant={isSunk ? 'sunk' : 'dock'}
+                        className={`w-full h-full ${isSunk ? 'opacity-95' : 'opacity-65'}`}
+                      />
+                    </div>
+                  </div>
                   <div className="flex items-center justify-center gap-1 mt-1">
                     {Array.from({ length: ship.size }).map((_, i) => (
                       <span
@@ -518,104 +561,130 @@ export const BattleScreen: React.FC = () => {
           {/* Radar Tactical Grid */}
           <div className="relative inline-block select-none overflow-x-auto max-w-full">
             {/* Column Headers A-J */}
-            <div className="flex ml-5 sm:ml-7 mb-1">
+            <div className="flex gap-0.5 sm:gap-1 ml-6 sm:ml-8 mb-1">
               {COLUMN_LABELS.map((col) => (
                 <div
                   key={col}
-                  className="w-[26px] h-5 sm:w-8 sm:h-6 md:w-9 md:h-7 flex items-center justify-center text-[10px] sm:text-xs font-mono font-bold text-slate-400"
+                  className="w-[26px] h-5 sm:w-8 sm:h-6 md:w-9 md:h-7 flex items-center justify-center text-[10px] sm:text-xs font-mono font-bold text-emerald-400/80"
                 >
                   {col}
                 </div>
               ))}
             </div>
 
-            {/* Grid Rows */}
-            <div className="flex flex-col gap-0.5 sm:gap-1">
-              {ROW_LABELS.map((row, y) => (
-                <div key={row} className="flex items-center gap-0.5 sm:gap-1">
-                  {/* Row Label 1-10 */}
-                  <div className="w-5 sm:w-6 text-right pr-1 sm:pr-2 text-[10px] sm:text-xs font-mono font-bold text-slate-400">
+            <div className="flex items-start">
+              {/* Row Labels 1-10 */}
+              <div className="flex flex-col gap-0.5 sm:gap-1 mr-1 sm:mr-1.5">
+                {ROW_LABELS.map((row) => (
+                  <div
+                    key={row}
+                    className="w-5 sm:w-6 h-[26px] sm:h-8 md:h-9 flex items-center justify-end pr-1 text-[10px] sm:text-xs font-mono font-bold text-emerald-400/80"
+                  >
                     {row}
                   </div>
+                ))}
+              </div>
+
+              {/* 10x10 Hostile Radar Matrix with Sunk Ship Reveal */}
+              <div className="relative p-1 rounded-xl bg-slate-950/90 border border-emerald-500/30 shadow-[inset_0_0_28px_rgba(16,185,129,0.12)] overflow-hidden">
+                <div className="relative grid grid-cols-10 gap-0.5 sm:gap-1">
+                  {/* Revealed Sunk Enemy Warships Layer */}
+                  <GridShipOverlay
+                    ships={revealedOpponentShips}
+                    defaultVariant="sunk"
+                  />
 
                   {/* Grid Cells */}
-                  {COLUMN_LABELS.map((_, x) => {
-                    const cellKey = `${x},${y}`
-                    const notation = coordToNotation({ x, y })
-                    const shotResult = targetShots.get(cellKey)
-                    const sunkShipType = opponentSunkCellMap.get(cellKey)
+                  {ROW_LABELS.map((_, y) =>
+                    COLUMN_LABELS.map((_, x) => {
+                      const cellKey = `${x},${y}`
+                      const notation = coordToNotation({ x, y })
+                      const shotResult = targetShots.get(cellKey)
+                      const sunkShipType = opponentSunkCellMap.get(cellKey)
 
-                    const isTargeted = Boolean(shotResult)
-                    const isSunk = Boolean(sunkShipType || shotResult === 'sunk')
-                    const isHit = shotResult === 'hit' || isSunk
-                    const isMiss = shotResult === 'miss'
-                    const isFocused = focusedTargetCoord.x === x && focusedTargetCoord.y === y
-                    const focusRing = isFocused ? 'ring-2 ring-cyan-400 ring-offset-1 ring-offset-slate-950 z-10' : ''
-                    const sunkPatternStyle = isSunk
-                      ? {
-                          backgroundImage:
-                            'repeating-linear-gradient(45deg, rgba(225, 29, 72, 0.4), rgba(225, 29, 72, 0.4) 3px, rgba(136, 19, 55, 0.9) 3px, rgba(136, 19, 55, 0.9) 6px)',
-                        }
-                      : undefined
+                      const isTargeted = Boolean(shotResult)
+                      const isSunk = Boolean(sunkShipType || shotResult === 'sunk')
+                      const isHit = shotResult === 'hit' || isSunk
+                      const isMiss = shotResult === 'miss'
+                      const isFocused = focusedTargetCoord.x === x && focusedTargetCoord.y === y
+                      const focusRing = isFocused
+                        ? 'ring-2 ring-cyan-400 ring-offset-1 ring-offset-slate-950 z-20'
+                        : ''
+                      const sunkPatternStyle = isSunk
+                        ? {
+                            backgroundImage:
+                              'repeating-linear-gradient(45deg, rgba(225, 29, 72, 0.25), rgba(225, 29, 72, 0.25) 3px, rgba(136, 19, 55, 0.55) 3px, rgba(136, 19, 55, 0.55) 6px)',
+                          }
+                        : undefined
 
-                    let cellStyle =
-                      'bg-slate-950/70 border-slate-800/80 text-slate-500'
-                    let cellContent: React.ReactNode = null
-                    let ariaLabel = `Target cell ${notation}`
+                      let cellStyle =
+                        'bg-slate-950/50 border-slate-800/75 text-slate-500'
+                      let cellContent: React.ReactNode = null
+                      let ariaLabel = `Target cell ${notation}`
 
-                    if (isSunk) {
-                      cellStyle =
-                        'bg-rose-950/90 border-rose-500 text-rose-200 font-bold shadow-inner'
-                      cellContent = (
-                        <div className="flex flex-col items-center justify-center leading-none">
-                          <span className="text-[10px] sm:text-xs">⚓</span>
-                          <span className="text-[7px] font-mono leading-none uppercase font-black text-rose-200">
-                            {sunkShipType ? sunkShipType.slice(0, 1) : '✕'}
+                      if (isSunk) {
+                        cellStyle =
+                          'bg-rose-950/45 border-rose-500/80 text-rose-100 font-bold shadow-inner'
+                        cellContent = (
+                          <span className="text-xs sm:text-sm leading-none drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
+                            ⚓
                           </span>
-                        </div>
-                      )
-                      ariaLabel = `Target cell ${notation}, SUNK ${sunkShipType || 'vessel'} (diagonal striped)`
-                    } else if (isHit) {
-                      cellStyle =
-                        'bg-rose-600/30 border-rose-500 text-rose-200 font-black animate-pulse'
-                      cellContent = <span className="text-xs sm:text-sm leading-none">✕</span>
-                      ariaLabel = `Target cell ${notation}, HIT (vessel damaged)`
-                    } else if (isMiss) {
-                      cellStyle =
-                        'bg-slate-900/90 border-slate-700 text-cyan-300 font-bold'
-                      cellContent = <span className="text-xs sm:text-sm leading-none">○</span>
-                      ariaLabel = `Target cell ${notation}, MISS (water splash)`
-                    } else {
-                      // Untargeted
-                      if (isMyTurn && !isMatchOver) {
+                        )
+                        ariaLabel = `Target cell ${notation}, SUNK ${sunkShipType || 'vessel'} (diagonal striped)`
+                      } else if (isHit) {
                         cellStyle =
-                          'bg-slate-950/70 border-slate-800 hover:border-cyan-400 hover:bg-cyan-500/20 text-cyan-300 cursor-crosshair active:scale-95'
-                        ariaLabel = `Target cell ${notation}, ready to fire${isFocused ? ' (press Enter or Space to fire)' : ''}`
+                          'bg-rose-600/35 border-rose-500 text-rose-100 font-black shadow-[inset_0_0_10px_rgba(244,63,94,0.45)]'
+                        cellContent = (
+                          <span className="relative flex items-center justify-center w-full h-full">
+                            <span className="absolute w-4 h-4 sm:w-5 sm:h-5 rounded-full border border-rose-400/70 animate-ping opacity-40" />
+                            <span className="text-xs sm:text-sm leading-none drop-shadow-[0_0_4px_rgba(244,63,94,0.9)]">
+                              ✕
+                            </span>
+                          </span>
+                        )
+                        ariaLabel = `Target cell ${notation}, HIT (vessel damaged)`
+                      } else if (isMiss) {
+                        cellStyle =
+                          'bg-slate-900/80 border-slate-700/80 text-cyan-300 font-bold'
+                        cellContent = (
+                          <span className="relative flex items-center justify-center w-full h-full">
+                            <span className="absolute w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full border border-cyan-500/30" />
+                            <span className="text-xs sm:text-sm leading-none">○</span>
+                          </span>
+                        )
+                        ariaLabel = `Target cell ${notation}, MISS (water splash)`
                       } else {
-                        cellStyle =
-                          'bg-slate-950/40 border-slate-900 text-slate-700 cursor-not-allowed opacity-75'
-                        ariaLabel = `Target cell ${notation}, stand by`
+                        // Untargeted
+                        if (isMyTurn && !isMatchOver) {
+                          cellStyle =
+                            'bg-slate-950/55 border-slate-800/80 hover:border-emerald-400 hover:bg-emerald-500/15 text-emerald-300 cursor-crosshair active:scale-95'
+                          ariaLabel = `Target cell ${notation}, ready to fire${isFocused ? ' (press Enter or Space to fire)' : ''}`
+                        } else {
+                          cellStyle =
+                            'bg-slate-950/40 border-slate-900 text-slate-700 cursor-not-allowed opacity-75'
+                          ariaLabel = `Target cell ${notation}, stand by`
+                        }
                       }
-                    }
 
-                    return (
-                      <button
-                        key={cellKey}
-                        type="button"
-                        tabIndex={isFocused ? 0 : -1}
-                        onFocus={() => setFocusedTargetCoord({ x, y })}
-                        aria-label={ariaLabel}
-                        onClick={() => handleTargetCellClick(x, y)}
-                        disabled={isTargeted || !isMyTurn || isMatchOver}
-                        style={sunkPatternStyle}
-                        className={`w-[26px] h-[26px] sm:w-8 sm:h-8 md:w-9 md:h-9 rounded border flex items-center justify-center font-mono transition-all duration-150 relative ${cellStyle} ${focusRing}`}
-                      >
-                        {cellContent}
-                      </button>
-                    )
-                  })}
+                      return (
+                        <button
+                          key={cellKey}
+                          type="button"
+                          tabIndex={isFocused ? 0 : -1}
+                          onFocus={() => setFocusedTargetCoord({ x, y })}
+                          aria-label={ariaLabel}
+                          onClick={() => handleTargetCellClick(x, y)}
+                          disabled={isTargeted || !isMyTurn || isMatchOver}
+                          style={sunkPatternStyle}
+                          className={`w-[26px] h-[26px] sm:w-8 sm:h-8 md:w-9 md:h-9 rounded border flex items-center justify-center font-mono transition-all duration-150 relative z-10 ${cellStyle} ${focusRing}`}
+                        >
+                          {cellContent}
+                        </button>
+                      )
+                    }),
+                  )}
                 </div>
-              ))}
+              </div>
             </div>
           </div>
 
@@ -671,96 +740,112 @@ export const BattleScreen: React.FC = () => {
             {/* Defensive Tactical Grid */}
             <div className="relative inline-block select-none overflow-x-auto max-w-full">
               {/* Column Headers A-J */}
-              <div className="flex ml-5 sm:ml-7 mb-1">
+              <div className="flex gap-0.5 sm:gap-1 ml-6 sm:ml-8 mb-1">
                 {COLUMN_LABELS.map((col) => (
                   <div
                     key={col}
-                    className="w-[26px] h-5 sm:w-8 sm:h-6 md:w-8 md:h-7 flex items-center justify-center text-[10px] sm:text-xs font-mono font-bold text-slate-400"
+                    className="w-[26px] h-5 sm:w-8 sm:h-6 md:w-8 md:h-7 flex items-center justify-center text-[10px] sm:text-xs font-mono font-bold text-cyan-400/80"
                   >
                     {col}
                   </div>
                 ))}
               </div>
 
-              {/* Grid Rows */}
-              <div className="flex flex-col gap-0.5 sm:gap-1">
-                {ROW_LABELS.map((row, y) => (
-                  <div key={row} className="flex items-center gap-0.5 sm:gap-1">
-                    {/* Row Label 1-10 */}
-                    <div className="w-5 sm:w-6 text-right pr-1 sm:pr-2 text-[10px] sm:text-xs font-mono font-bold text-slate-400">
+              <div className="flex items-start">
+                {/* Row Labels 1-10 */}
+                <div className="flex flex-col gap-0.5 sm:gap-1 mr-1 sm:mr-1.5">
+                  {ROW_LABELS.map((row) => (
+                    <div
+                      key={row}
+                      className="w-5 sm:w-6 h-[26px] sm:h-8 md:h-8 flex items-center justify-end pr-1 text-[10px] sm:text-xs font-mono font-bold text-cyan-400/80"
+                    >
                       {row}
                     </div>
+                  ))}
+                </div>
+
+                {/* 10x10 Defensive Ocean Matrix with Continuous Fleet Vessels */}
+                <div className="relative p-1 rounded-xl bg-slate-950/90 border border-cyan-500/30 shadow-[inset_0_0_24px_rgba(6,182,212,0.12)] overflow-hidden">
+                  <div className="relative grid grid-cols-10 gap-0.5 sm:gap-1">
+                    {/* Continuous Multi-Cell Friendly Fleet Layer */}
+                    <GridShipOverlay
+                      ships={ownFleet}
+                      sunkShipTypes={ownSunkShipTypes}
+                      defaultVariant="deployed"
+                    />
 
                     {/* Grid Cells */}
-                    {COLUMN_LABELS.map((_, x) => {
-                      const cellKey = `${x},${y}`
-                      const notation = coordToNotation({ x, y })
-                      const occupied = ownOccupiedMap.get(cellKey)
-                      const shotResult = ownShots.get(cellKey)
-                      const isSunk = Boolean(ownSunkCellMap.get(cellKey))
-                      const sunkPatternStyle = isSunk
-                        ? {
-                            backgroundImage:
-                              'repeating-linear-gradient(45deg, rgba(225, 29, 72, 0.4), rgba(225, 29, 72, 0.4) 3px, rgba(136, 19, 55, 0.9) 3px, rgba(136, 19, 55, 0.9) 6px)',
-                          }
-                        : undefined
+                    {ROW_LABELS.map((_, y) =>
+                      COLUMN_LABELS.map((_, x) => {
+                        const cellKey = `${x},${y}`
+                        const notation = coordToNotation({ x, y })
+                        const occupied = ownOccupiedMap.get(cellKey)
+                        const shotResult = ownShots.get(cellKey)
+                        const isSunk = Boolean(ownSunkCellMap.get(cellKey))
+                        const sunkPatternStyle = isSunk
+                          ? {
+                              backgroundImage:
+                                'repeating-linear-gradient(45deg, rgba(225, 29, 72, 0.25), rgba(225, 29, 72, 0.25) 3px, rgba(136, 19, 55, 0.55) 3px, rgba(136, 19, 55, 0.55) 6px)',
+                            }
+                          : undefined
 
-                      let cellStyle = 'bg-slate-950/60 border-slate-850'
-                      let cellContent: React.ReactNode = null
-                      let ariaLabel = `Defensive cell ${notation}`
+                        let cellStyle = 'bg-slate-950/45 border-slate-800/70'
+                        let cellContent: React.ReactNode = null
+                        let ariaLabel = `Defensive cell ${notation}`
 
-                      if (occupied) {
-                        if (isSunk) {
-                          cellStyle =
-                            'bg-rose-950/90 border-rose-500 text-rose-200 font-bold'
-                          cellContent = (
-                            <div className="flex flex-col items-center justify-center leading-none">
-                              <span className="text-[10px]">⚓</span>
-                              <span className="text-[7px] uppercase font-mono font-black text-rose-200">
-                                {occupied.ship.type.slice(0, 1)}
+                        if (occupied) {
+                          if (isSunk) {
+                            cellStyle =
+                              'bg-rose-950/45 border-rose-500/80 text-rose-100 font-bold'
+                            cellContent = (
+                              <span className="text-xs leading-none drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
+                                ⚓
                               </span>
-                            </div>
-                          )
-                          ariaLabel = `Defensive cell ${notation}, SUNK ${occupied.ship.type} (diagonal striped)`
-                        } else if (shotResult === 'hit') {
-                          cellStyle =
-                            'bg-rose-600/40 border-rose-500 text-rose-200 font-black animate-pulse'
-                          cellContent = <span className="text-xs leading-none">✕</span>
-                          ariaLabel = `Defensive cell ${notation}, HIT on ${occupied.ship.type}`
+                            )
+                            ariaLabel = `Defensive cell ${notation}, SUNK ${occupied.ship.type} (diagonal striped)`
+                          } else if (shotResult === 'hit') {
+                            cellStyle =
+                              'bg-rose-600/35 border-rose-500 text-rose-100 font-black shadow-[inset_0_0_8px_rgba(244,63,94,0.45)]'
+                            cellContent = (
+                              <span className="text-xs leading-none drop-shadow-[0_0_4px_rgba(244,63,94,0.95)]">
+                                ✕
+                              </span>
+                            )
+                            ariaLabel = `Defensive cell ${notation}, HIT on ${occupied.ship.type}`
+                          } else {
+                            cellStyle =
+                              'bg-cyan-950/25 border-cyan-500/35 text-cyan-200 font-mono font-bold'
+                            cellContent =
+                              occupied.index === 0 ? (
+                                <span className="sr-only">{occupied.ship.type}</span>
+                              ) : null
+                            ariaLabel = `Defensive cell ${notation}, ${occupied.ship.type}`
+                          }
                         } else {
-                          cellStyle =
-                            'bg-cyan-950/70 border-cyan-600/70 text-cyan-200 font-mono font-bold'
-                          cellContent = (
-                            <span className="text-[9px] uppercase tracking-tighter">
-                              {occupied.ship.type.slice(0, 1)}
-                            </span>
-                          )
-                          ariaLabel = `Defensive cell ${notation}, ${occupied.ship.type}`
+                          // Empty water cell
+                          if (shotResult === 'miss') {
+                            cellStyle = 'bg-slate-900/80 border-slate-700 text-cyan-300 font-bold'
+                            cellContent = <span className="text-xs leading-none">○</span>
+                            ariaLabel = `Defensive cell ${notation}, enemy miss`
+                          } else {
+                            cellStyle = 'bg-slate-950/40 border-slate-900 text-slate-700'
+                          }
                         }
-                      } else {
-                        // Empty water cell
-                        if (shotResult === 'miss') {
-                          cellStyle = 'bg-slate-900 border-slate-700 text-cyan-300 font-bold'
-                          cellContent = <span className="text-xs leading-none">○</span>
-                          ariaLabel = `Defensive cell ${notation}, enemy miss`
-                        } else {
-                          cellStyle = 'bg-slate-950/40 border-slate-900 text-slate-700'
-                        }
-                      }
 
-                      return (
-                        <div
-                          key={cellKey}
-                          aria-label={ariaLabel}
-                          style={sunkPatternStyle}
-                          className={`w-[26px] h-[26px] sm:w-8 sm:h-8 md:w-8 md:h-8 rounded border flex items-center justify-center font-mono ${cellStyle}`}
-                        >
-                          {cellContent}
-                        </div>
-                      )
-                    })}
+                        return (
+                          <div
+                            key={cellKey}
+                            aria-label={ariaLabel}
+                            style={sunkPatternStyle}
+                            className={`w-[26px] h-[26px] sm:w-8 sm:h-8 md:w-8 md:h-8 rounded border flex items-center justify-center font-mono relative z-10 ${cellStyle}`}
+                          >
+                            {cellContent}
+                          </div>
+                        )
+                      }),
+                    )}
                   </div>
-                ))}
+                </div>
               </div>
             </div>
           </div>

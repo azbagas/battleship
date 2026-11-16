@@ -3,6 +3,7 @@ import { useLobby } from '../context/LobbyContext'
 import { useSession } from '../context/SessionContext'
 import { ConnectionBadge } from './ConnectionBadge'
 import { OpponentDisconnectBanner } from './OpponentDisconnectBanner'
+import { GridShipOverlay, ShipSvg } from './ShipSvg'
 import { Coord, Orientation, PlacedShip, ShipType } from '../types/protocol'
 import {
   COLUMN_LABELS,
@@ -48,6 +49,8 @@ export const PlacementScreen: React.FC = () => {
   const [hoveredCoord, setHoveredCoord] = useState<Coord | null>(null)
   // Focused coordinate for keyboard navigation
   const [focusedCoord, setFocusedCoord] = useState<Coord>({ x: 0, y: 0 })
+  // Only show keyboard focus ring & keyboard preview when actively navigating by keyboard
+  const [isKeyboardNav, setIsKeyboardNav] = useState<boolean>(false)
 
   // Timer countdown
   const [secondsRemaining, setSecondsRemaining] = useState<number>(60)
@@ -105,7 +108,7 @@ export const PlacementScreen: React.FC = () => {
 
   // Hover or keyboard preview calculation
   const activeShipTypeForPreview = draggedShipType || selectedShipType
-  const activePreviewCoord = hoveredCoord || (selectedShipType ? focusedCoord : null)
+  const activePreviewCoord = hoveredCoord || (selectedShipType && isKeyboardNav ? focusedCoord : null)
   const hoverPreview = useMemo(() => {
     if (!activePreviewCoord || !activeShipTypeForPreview || isFleetConfirmed) {
       return null
@@ -125,6 +128,12 @@ export const PlacementScreen: React.FC = () => {
     return {
       cells,
       valid,
+      inBounds,
+      ship: {
+        type: activeShipTypeForPreview,
+        origin: activePreviewCoord,
+        orientation: currentOrientation,
+      } as PlacedShip,
     }
   }, [activePreviewCoord, activeShipTypeForPreview, currentOrientation, isFleetConfirmed, ships])
 
@@ -233,21 +242,25 @@ export const PlacementScreen: React.FC = () => {
 
       if (e.key === 'ArrowUp') {
         e.preventDefault()
+        setIsKeyboardNav(true)
         setFocusedCoord((c) => ({ ...c, y: Math.max(0, c.y - 1) }))
         return
       }
       if (e.key === 'ArrowDown') {
         e.preventDefault()
+        setIsKeyboardNav(true)
         setFocusedCoord((c) => ({ ...c, y: Math.min(9, c.y + 1) }))
         return
       }
       if (e.key === 'ArrowLeft') {
         e.preventDefault()
+        setIsKeyboardNav(true)
         setFocusedCoord((c) => ({ ...c, x: Math.max(0, c.x - 1) }))
         return
       }
       if (e.key === 'ArrowRight') {
         e.preventDefault()
+        setIsKeyboardNav(true)
         setFocusedCoord((c) => ({ ...c, x: Math.min(9, c.x + 1) }))
         return
       }
@@ -257,6 +270,7 @@ export const PlacementScreen: React.FC = () => {
         const idx = parseInt(e.key, 10) - 1
         if (FLEET_SHIPS[idx]) {
           e.preventDefault()
+          setIsKeyboardNav(true)
           setSelectedShipType(FLEET_SHIPS[idx].type)
         }
         return
@@ -498,80 +512,112 @@ export const PlacementScreen: React.FC = () => {
           {/* Tactical 10x10 Grid */}
           <div className="relative inline-block select-none overflow-x-auto max-w-full">
             {/* Column Headers A-J */}
-            <div className="flex ml-5 sm:ml-7 mb-1">
+            <div className="flex gap-0.5 sm:gap-1 ml-6 sm:ml-8 mb-1">
               {COLUMN_LABELS.map((col) => (
                 <div
                   key={col}
-                  className="w-[26px] h-5 sm:w-8 sm:h-6 md:w-10 md:h-7 flex items-center justify-center text-[10px] sm:text-xs font-mono font-bold text-slate-400"
+                  className="w-[26px] h-5 sm:w-8 sm:h-6 md:w-10 md:h-7 flex items-center justify-center text-[10px] sm:text-xs font-mono font-bold text-cyan-400/80"
                 >
                   {col}
                 </div>
               ))}
             </div>
 
-            {/* Grid Rows */}
-            <div className="flex flex-col gap-0.5 sm:gap-1">
-              {ROW_LABELS.map((row, y) => (
-                <div key={row} className="flex items-center gap-0.5 sm:gap-1">
-                  {/* Row Label 1-10 */}
-                  <div className="w-5 sm:w-6 text-right pr-1 sm:pr-2 text-[10px] sm:text-xs font-mono font-bold text-slate-400">
+            <div className="flex items-start">
+              {/* Row Labels 1-10 */}
+              <div className="flex flex-col gap-0.5 sm:gap-1 mr-1 sm:mr-1.5">
+                {ROW_LABELS.map((row) => (
+                  <div
+                    key={row}
+                    className="w-5 sm:w-6 h-[26px] sm:h-8 md:h-10 flex items-center justify-end pr-1 text-[10px] sm:text-xs font-mono font-bold text-cyan-400/80"
+                  >
                     {row}
                   </div>
+                ))}
+              </div>
 
-                  {/* Grid Cells */}
-                  {COLUMN_LABELS.map((_, x) => {
-                    const cellKey = `${x},${y}`
-                    const occupied = occupiedCellMap.get(cellKey)
-                    const isPreview = previewCellMap.has(cellKey)
-                    const isPreviewValid = previewCellMap.get(cellKey)
-                    const isSelected =
-                      selectedShipType && occupied?.ship.type === selectedShipType
-                    const isFocused = focusedCoord.x === x && focusedCoord.y === y
-                    const focusRing = isFocused && !isFleetConfirmed ? 'ring-2 ring-cyan-400 ring-offset-1 ring-offset-slate-950 z-10' : ''
-
-                    let cellBg = 'bg-slate-950/70 border-slate-800/80 hover:border-cyan-500/40'
-
-                    if (occupied) {
-                      cellBg = isSelected
-                        ? 'bg-amber-500/20 border-amber-400 text-amber-200'
-                        : 'bg-cyan-950/70 border-cyan-600/70 text-cyan-200'
+              {/* 10x10 Ocean Matrix with Continuous Ship Overlay */}
+              <div className="relative p-1 rounded-xl bg-slate-950/90 border border-cyan-500/30 shadow-[inset_0_0_28px_rgba(6,182,212,0.12)] overflow-hidden">
+                <div
+                  className="relative grid grid-cols-10 gap-0.5 sm:gap-1"
+                  onMouseLeave={() => setHoveredCoord(null)}
+                >
+                  {/* Continuous Multi-Cell Warship SVG Layer */}
+                  <GridShipOverlay
+                    ships={ships}
+                    selectedShipType={selectedShipType}
+                    previewShip={
+                      hoverPreview && hoverPreview.inBounds
+                        ? { ship: hoverPreview.ship, valid: hoverPreview.valid }
+                        : null
                     }
+                  />
 
-                    if (isPreview) {
-                      cellBg = isPreviewValid
-                        ? 'bg-emerald-500/30 border-emerald-400 text-emerald-200'
-                        : 'bg-rose-500/30 border-rose-500 text-rose-200'
-                    }
+                  {/* Interactive Grid Cells */}
+                  {ROW_LABELS.map((row, y) =>
+                    COLUMN_LABELS.map((_, x) => {
+                      const cellKey = `${x},${y}`
+                      const occupied = occupiedCellMap.get(cellKey)
+                      const isPreview = previewCellMap.has(cellKey)
+                      const isPreviewValid = previewCellMap.get(cellKey)
+                      const isSelected =
+                        selectedShipType && occupied?.ship.type === selectedShipType
+                      const isFocused = focusedCoord.x === x && focusedCoord.y === y
+                      const focusRing =
+                        isFocused && isKeyboardNav && !isFleetConfirmed
+                          ? 'ring-2 ring-cyan-400 ring-offset-1 ring-offset-slate-950 z-20'
+                          : ''
 
-                    return (
-                      <button
-                        key={cellKey}
-                        type="button"
-                        tabIndex={isFocused ? 0 : -1}
-                        onFocus={() => setFocusedCoord({ x, y })}
-                        aria-label={`Cell ${COLUMN_LABELS[x]}${row}${
-                          occupied ? `, ${occupied.ship.type}` : ''
-                        }`}
-                        onClick={() => handleCellClick(x, y)}
-                        onMouseEnter={() => !isFleetConfirmed && setHoveredCoord({ x, y })}
-                        onMouseLeave={() => setHoveredCoord(null)}
-                        onDragOver={(e) => handleCellDragOver(x, y, e)}
-                        onDrop={(e) => handleDrop(x, y, e)}
-                        disabled={isFleetConfirmed}
-                        className={`w-[26px] h-[26px] sm:w-8 sm:h-8 md:w-10 md:h-10 rounded border text-[9px] sm:text-[10px] font-mono flex items-center justify-center transition-all duration-150 relative ${cellBg} ${
-                          isFleetConfirmed ? 'cursor-not-allowed opacity-90' : 'cursor-pointer'
-                        } ${focusRing}`}
-                      >
-                        {occupied && (
-                          <div className="w-full h-full flex items-center justify-center font-bold uppercase text-[9px] sm:text-[10px] tracking-tight">
-                            {occupied.ship.type.slice(0, 1)}
-                          </div>
-                        )}
-                      </button>
-                    )
-                  })}
+                      let cellBg =
+                        'bg-slate-900/45 border-slate-800/75 hover:border-cyan-400/50 hover:bg-cyan-500/10'
+
+                      if (occupied) {
+                        cellBg = isSelected
+                          ? 'bg-amber-500/15 border-amber-400/70 text-amber-200'
+                          : 'bg-cyan-950/35 border-cyan-500/40 text-cyan-200'
+                      }
+
+                      if (isPreview) {
+                        cellBg = isPreviewValid
+                          ? 'bg-emerald-500/25 border-emerald-400/80 text-emerald-200'
+                          : 'bg-rose-500/30 border-rose-500/90 text-rose-200'
+                      }
+
+                      return (
+                        <button
+                          key={cellKey}
+                          type="button"
+                          tabIndex={isFocused ? 0 : -1}
+                          onFocus={() => setFocusedCoord({ x, y })}
+                          aria-label={`Cell ${COLUMN_LABELS[x]}${row}${
+                            occupied ? `, ${occupied.ship.type}` : ''
+                          }`}
+                          onClick={() => {
+                            setIsKeyboardNav(false)
+                            handleCellClick(x, y)
+                          }}
+                          onMouseEnter={() => {
+                            if (!isFleetConfirmed) {
+                              setIsKeyboardNav(false)
+                              setHoveredCoord({ x, y })
+                            }
+                          }}
+                          onDragOver={(e) => handleCellDragOver(x, y, e)}
+                          onDrop={(e) => handleDrop(x, y, e)}
+                          disabled={isFleetConfirmed}
+                          className={`w-[26px] h-[26px] sm:w-8 sm:h-8 md:w-10 md:h-10 rounded border text-[9px] sm:text-[10px] font-mono flex items-center justify-center transition-all duration-150 relative z-10 ${cellBg} ${
+                            isFleetConfirmed ? 'cursor-not-allowed opacity-90' : 'cursor-pointer'
+                          } ${focusRing}`}
+                        >
+                          {occupied && occupied.index === 0 && (
+                            <span className="sr-only">{occupied.ship.type}</span>
+                          )}
+                        </button>
+                      )
+                    }),
+                  )}
                 </div>
-              ))}
+              </div>
             </div>
           </div>
 
@@ -754,18 +800,33 @@ export const PlacementScreen: React.FC = () => {
                           </span>
                         </div>
 
-                        {/* Ship segments preview bar */}
-                        <div className="flex gap-1 mt-1.5">
-                          {Array.from({ length: ship.size }).map((_, i) => (
-                            <div
-                              key={i}
-                              className={`w-3.5 h-3.5 rounded-sm border ${
-                                placed
-                                  ? 'bg-cyan-600/50 border-cyan-500/70'
-                                  : 'bg-slate-800 border-slate-700'
-                              }`}
+                        {/* Ship Blueprint Silhouette & Segment Bar */}
+                        <div className="flex items-center gap-3 mt-1.5">
+                          <div
+                            style={{ width: `${ship.size * 24}px`, height: '22px' }}
+                            className="shrink-0"
+                          >
+                            <ShipSvg
+                              type={ship.type}
+                              orientation="horizontal"
+                              variant={isSelected ? 'selected' : placed ? 'deployed' : 'dock'}
+                              className="w-full h-full"
                             />
-                          ))}
+                          </div>
+                          <div className="flex gap-1">
+                            {Array.from({ length: ship.size }).map((_, i) => (
+                              <div
+                                key={i}
+                                className={`w-2.5 h-2.5 rounded-sm border ${
+                                  placed
+                                    ? 'bg-cyan-500/60 border-cyan-400/80'
+                                    : isSelected
+                                      ? 'bg-amber-500/60 border-amber-400/80'
+                                      : 'bg-slate-800 border-slate-700'
+                                }`}
+                              />
+                            ))}
+                          </div>
                         </div>
                       </div>
                     </div>

@@ -1,4 +1,4 @@
-import { Coord, Orientation, PlacedShip, ShipType } from '../types/protocol'
+import { Coord, Orientation, PlacedShip, ShipType, SunkShipInfo } from '../types/protocol'
 
 export const GRID_SIZE = 10
 export const COLUMN_LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']
@@ -161,4 +161,31 @@ export function coordToNotation(c: Coord): string {
   }
   return `${COLUMN_LABELS[c.x]}${ROW_LABELS[c.y]}`
 }
+
+// sunkShipToPlacedShip reconstructs a PlacedShip from a SunkShipInfo payload on the Target Radar.
+export function sunkShipToPlacedShip(sunk: SunkShipInfo): PlacedShip | null {
+  if (!sunk.cells || sunk.cells.length === 0) {
+    return null
+  }
+  const size = SHIP_SIZES[sunk.type] || sunk.cells.length
+  const xs = sunk.cells.map((c) => c.x)
+  const ys = sunk.cells.map((c) => c.y)
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const maxY = Math.max(...ys)
+
+  const orientation: Orientation = maxY > minY && maxX === minX ? 'vertical' : 'horizontal'
+  const clampedX =
+    orientation === 'horizontal' ? Math.max(0, Math.min(minX, 10 - size)) : Math.max(0, Math.min(minX, 9))
+  const clampedY =
+    orientation === 'vertical' ? Math.max(0, Math.min(minY, 10 - size)) : Math.max(0, Math.min(minY, 9))
+
+  return {
+    type: sunk.type,
+    origin: { x: clampedX, y: clampedY },
+    orientation,
+  }
+}
+
 
