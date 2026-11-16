@@ -214,6 +214,41 @@ func GenerateRandomFleet(rng *rand.Rand) []PlacedShip {
 	return fleet
 }
 
+// ValidatePartialFleet checks that a partial or complete slice of placed ships (0..5 ships)
+// contains only valid ship types without duplicates, valid orientations, in-bounds cells, and no overlaps.
+func ValidatePartialFleet(ships []PlacedShip) error {
+	if len(ships) > len(StandardFleetTypes) {
+		return fmt.Errorf("%w: got %d ships", ErrInvalidShipCount, len(ships))
+	}
+
+	occupied := [GridWidth][GridHeight]bool{}
+	seenTypes := make(map[ShipType]bool, len(StandardFleetTypes))
+
+	for _, ship := range ships {
+		if _, exists := StandardShipLengths[ship.Type]; !exists {
+			return fmt.Errorf("%w: %q", ErrUnknownShipType, ship.Type)
+		}
+		if seenTypes[ship.Type] {
+			return fmt.Errorf("%w: %q", ErrDuplicateShipType, ship.Type)
+		}
+		seenTypes[ship.Type] = true
+
+		cells, err := ship.Cells()
+		if err != nil {
+			return fmt.Errorf("existing ship %q: %w", ship.Type, err)
+		}
+
+		for _, c := range cells {
+			if occupied[c.X][c.Y] {
+				return fmt.Errorf("%w at (%d,%d) by existing ship %q", ErrShipOverlap, c.X, c.Y, ship.Type)
+			}
+			occupied[c.X][c.Y] = true
+		}
+	}
+
+	return nil
+}
+
 // AutoPlaceRemaining preserves any valid existing placed ships and randomly
 // positions any unplaced ships from the standard fleet on the remaining free cells.
 // If existing already contains a valid 5-ship fleet, it is validated and returned untouched.
@@ -222,32 +257,17 @@ func AutoPlaceRemaining(existing []PlacedShip, rng *rand.Rand) ([]PlacedShip, er
 		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
 
-	if len(existing) > len(StandardFleetTypes) {
-		return nil, fmt.Errorf("%w: got %d ships", ErrInvalidShipCount, len(existing))
+	if err := ValidatePartialFleet(existing); err != nil {
+		return nil, err
 	}
 
 	occupied := [GridWidth][GridHeight]bool{}
 	seenTypes := make(map[ShipType]bool, len(StandardFleetTypes))
 
-	// Validate existing ships
 	for _, ship := range existing {
-		if _, exists := StandardShipLengths[ship.Type]; !exists {
-			return nil, fmt.Errorf("%w: %q", ErrUnknownShipType, ship.Type)
-		}
-		if seenTypes[ship.Type] {
-			return nil, fmt.Errorf("%w: %q", ErrDuplicateShipType, ship.Type)
-		}
 		seenTypes[ship.Type] = true
-
-		cells, err := ship.Cells()
-		if err != nil {
-			return nil, fmt.Errorf("existing ship %q: %w", ship.Type, err)
-		}
-
+		cells, _ := ship.Cells()
 		for _, c := range cells {
-			if occupied[c.X][c.Y] {
-				return nil, fmt.Errorf("%w at (%d,%d) by existing ship %q", ErrShipOverlap, c.X, c.Y, ship.Type)
-			}
 			occupied[c.X][c.Y] = true
 		}
 	}

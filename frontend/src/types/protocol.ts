@@ -105,6 +105,16 @@ export interface PlacedShip {
 
 export interface PlacementSubmitPayload {
   ships: PlacedShip[]
+  draft?: boolean
+}
+
+export interface ShotRecordPayload {
+  shooterId: string
+  cell: Coord
+  result: ShotResult
+  sunkShip?: SunkShipInfo
+  auto?: boolean
+  timestamp?: string
 }
 
 export interface PlacementConfirmedPayload {
@@ -201,6 +211,7 @@ export interface RoomStatePayload {
   battleView?: PlayerBattleView
   winnerPlayerId?: string
   endReason?: string
+  shotLog?: ShotRecordPayload[]
   opponentDisconnected?: boolean
   opponentGraceDeadline?: string
 }

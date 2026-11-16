@@ -58,6 +58,7 @@ The backend runs zero-config with sensible defaults out of the box. Key environm
 ### Test
 ```bash
 cd backend && go test -race ./... && cd ../frontend && npm test
+npm run test:e2e
 ```
 
 ### Lint

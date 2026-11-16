@@ -80,8 +80,10 @@ type LobbyJoinPayload struct {
 }
 
 // PlacementSubmitPayload contains a player's proposed ship arrangement.
+// When Draft is true, partial placements (0..5 ships) are saved without locking the fleet.
 type PlacementSubmitPayload struct {
 	Ships []game.PlacedShip `json:"ships"`
+	Draft bool              `json:"draft,omitempty"`
 }
 
 // PlacementConfirmedPayload confirms a player's locked-in fleet.

@@ -619,6 +619,52 @@ func (m *LobbyManager) UnreadyRoom(playerID string) error {
 	return nil
 }
 
+// UpdateDraftFleet saves a player's unconfirmed partial or complete ship placements (0..5 ships)
+// during PhasePlacement without locking the fleet, so timeout auto-placement and reconnects preserve them.
+func (m *LobbyManager) UpdateDraftFleet(playerID string, ships []game.PlacedShip) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	currentRoomID, err := m.registry.GetPlayerRoom(playerID)
+	if err != nil || currentRoomID == "" {
+		return ErrNotInRoom
+	}
+
+	room, ok := m.rooms[currentRoomID]
+	if !ok {
+		return ErrRoomNotFound
+	}
+
+	if room.Phase != PhasePlacement {
+		return ErrNotInPlacement
+	}
+
+	isHost := playerID == room.HostPlayerID
+	isGuest := playerID == room.GuestPlayerID
+	if !isHost && !isGuest {
+		return ErrNotInRoom
+	}
+
+	if (isHost && room.HostFleetConfirmed) || (isGuest && room.GuestFleetConfirmed) {
+		return ErrFleetAlreadyLocked
+	}
+
+	if err := game.ValidatePartialFleet(ships); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidPlacement, err)
+	}
+
+	copied := make([]game.PlacedShip, len(ships))
+	copy(copied, ships)
+
+	if isHost {
+		room.HostFleet = copied
+	} else {
+		room.GuestFleet = copied
+	}
+
+	return nil
+}
+
 // SubmitFleet locks in a player's ship placements during PhasePlacement.
 func (m *LobbyManager) SubmitFleet(playerID string, ships []game.PlacedShip) error {
 	m.mu.Lock()
@@ -2258,4 +2304,14 @@ func (m *LobbyManager) SetRoomFinishedForTesting(roomID, winnerID, reason string
 		room.WinnerPlayerID = winnerID
 		room.EndReason = reason
 	}
+}
+
+// GetRoomGameIDForTesting returns the current GameID for a room in integration tests.
+func (m *LobbyManager) GetRoomGameIDForTesting(roomID string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if room, ok := m.rooms[roomID]; ok {
+		return room.GameID
+	}
+	return ""
 }

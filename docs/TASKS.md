@@ -4,13 +4,13 @@
      Tag tasks with feature IDs. Each task has a "Done when" line. -->
 
 ## Current focus
-In progress: none (ready for T-21 [all])
+In progress: none (v1 complete)
 
 Blocked: nothing
 
 Known issues: none
 
-Next up: T-21 [all] Write two-client WebSocket integration tests (full game, reconnect, rematch, simultaneous join race) and a Playwright E2E test of two browsers completing a game.
+Next up: v1.1 planning (Single-player AI opponent & Match history/replay UI per PRD)
 
 <!-- Update this block at the end of every session. If it passes ~15 lines, move it to STATUS.md. -->
 
@@ -81,11 +81,11 @@ Next up: T-21 [all] Write two-client WebSocket integration tests (full game, rec
   Done when: all 5 ship classes render distinct top-down vector hulls across grids, docks, and status cards in both orientations, ocean grids and shot markers feature tactical sonar/impact visuals while preserving colorblind symbols, and all frontend tests, linter, and build succeed.
 
 ### Wrap-up
-- [ ] T-21 [all] Write two-client WebSocket integration tests (full game, reconnect, rematch, simultaneous join race) and a Playwright E2E test of two browsers completing a game.
+- [x] T-21 [all] Write two-client WebSocket integration tests (full game, reconnect, rematch, simultaneous join race) and a Playwright E2E test of two browsers completing a game.
   Done when: all backend integration tests (`go test -race ./...`) and Playwright E2E tests pass reliably.
-- [ ] T-22 [all] Compare `PRD.md` to the code: confirm every "Done when" is met and list gaps.
+- [x] T-22 [all] Compare `PRD.md` to the code: confirm every "Done when" is met and list gaps.
   Done when: gap list is empty or turned into new tasks.
-- [ ] T-23 [all] Manual walkthrough of every user flow on desktop and mobile viewports.
+- [x] T-23 [all] Manual walkthrough of every user flow on desktop and mobile viewports.
   Done when: all flows work end to end.
 
 ## v1.1
@@ -116,6 +116,8 @@ Next up: T-21 [all] Write two-client WebSocket integration tests (full game, rec
 - 2026-11-12: T-19 implemented backend operational and security hardening: WebSocket origin verification via `AcceptOptions.OriginPatterns` (configurable via `ALLOWED_ORIGINS`), message payload read limits via `conn.SetReadLimit` (configurable via `MAX_PAYLOAD_BYTES`, default 32 KB), per-connection thread-safe token bucket rate limiter (configurable via `RATE_LIMIT_MESSAGES_PER_SEC` and `RATE_LIMIT_BURST`, default 10 msg/s with 20 burst), per-IP concurrent connection cap tracking IPv4 and IPv6 client addresses (configurable via `MAX_CONNS_PER_IP`, default 10 conns/IP), and graceful SIGTERM shutdown closing active sockets cleanly with code 1001 (`websocket.StatusGoingAway`) within a 5s drain window. Wire protocol fully specified in `docs/PROTOCOL.md`. Verified with race-enabled tests (`go test -race ./...`).
 - 2026-11-12: T-20 implemented frontend responsive layout polish and accessibility: 360 px mobile viewports supported across placement and combat with zero horizontal scrolling (compact 26px cells, reduced container padding, and mobile tabbed view for radar/fleet/combat log); colorblind-accessible tactical markers (miss `○`, hit `✕`, sunk `⚓` with high-contrast diagonal hatch pattern); full desktop keyboard controls for fleet placement (1-5 dock selector, Arrow navigation, R rotation, Enter placement, C confirmation) and combat salvo targeting (Arrow navigation, Enter/Space fire) with roving tab indices and focus reticles. Verified with 15 test suites (117 tests passing), clean ESLint, and production Vite build.
 - 2026-11-16: T-20b implemented top-down vector SVG ship blueprints (`ShipSvg` and `GridShipOverlay`) for all 5 vessel classes (Carrier angled flight deck & catapults, Battleship triple-barrel turrets & citadel, Cruiser VLS matrix & helipad, Submarine teardrop hull & missile hatches, Destroyer stealth hull & torpedo tubes). Integrated continuous multi-cell SVG vessels on the Placement Ocean Grid (with live emerald/crimson ghost placement previews), Fleet Dock cards, Battle Defensive Grid, Battle Target Radar (reconstructing and revealing opponent sunken hulls via `sunkShipToPlacedShip`), and Battle Fleet Status cards, alongside tactical sonar ring grid backdrops and impact/splash shot effects. Verified with 16 test suites (120 passing tests), clean ESLint, and production Vite build.
+- 2026-11-16: T-21, T-22, & T-23 completed v1 wrap-up. Added two-client WebSocket integration tests (`TestWebSocket_TwoClientFullGameAndPersistence`, `TestWebSocket_TwoClientBattleReconnectAndResume`, `TestWebSocket_TwoClientFullGameAndRematch`, `TestWebSocket_DraftPlacementPreservedOnTimeout`, `TestWebSocket_SimultaneousJoinRace`) and Playwright two-browser E2E tests (`full-game.spec.ts` and `mobile-and-flows.spec.ts`). Closed two edge-case gaps found during PRD audit: synced unconfirmed draft ship placements (`draft: true` on `placement.submit`) so partial fleets are preserved on 60s placement timeout and mid-placement reconnect, and preserved `totalShots` and `recentEvents` from `shotLog` when `room.state` follows `game.over` or restores a battle session. Verified all flows across desktop (1280×800) and mobile (360×640) viewports.
 
 ## Archive
 <!-- Move finished version groups here as one-line summaries, e.g. "v1 shipped: F-01 to F-03." -->
+- v1 shipped: F-01 to F-08 (T-01 through T-23).

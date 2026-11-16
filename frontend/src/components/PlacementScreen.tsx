@@ -26,6 +26,7 @@ export const PlacementScreen: React.FC = () => {
     ownFleet,
     placementDeadline,
     submitFleet,
+    syncDraftFleet,
     forfeitGame,
     isLeavingRoom,
     opponentDisconnectDeadline,
@@ -164,13 +165,13 @@ export const PlacementScreen: React.FC = () => {
           orientation: nextOrientation,
         }
         if (isValidPlacement(candidate, ships)) {
-          setShips((prev) =>
-            prev.map((s) => (s.type === selectedShipType ? candidate : s)),
-          )
+          const nextShips = ships.map((s) => (s.type === selectedShipType ? candidate : s))
+          setShips(nextShips)
+          syncDraftFleet?.(nextShips)
         }
       }
     }
-  }, [isFleetConfirmed, currentOrientation, selectedShipType, placedShipTypes, ships])
+  }, [isFleetConfirmed, currentOrientation, selectedShipType, placedShipTypes, ships, syncDraftFleet])
 
   // Place ship at target coordinate
   const placeShipAt = useCallback(
@@ -185,15 +186,14 @@ export const PlacementScreen: React.FC = () => {
         return false
       }
 
-      setShips((prev) => {
-        const filtered = prev.filter((s) => s.type !== type)
-        return [...filtered, candidate]
-      })
+      const nextShips = [...ships.filter((s) => s.type !== type), candidate]
+      setShips(nextShips)
+      syncDraftFleet?.(nextShips)
       setSelectedShipType(null)
       setDraggedShipType(null)
       return true
     },
-    [isFleetConfirmed, ships],
+    [isFleetConfirmed, ships, syncDraftFleet],
   )
 
   // Cell Click (tap-to-place or select placed ship)
@@ -303,7 +303,9 @@ export const PlacementScreen: React.FC = () => {
   // Remove ship back to dock
   const handleRemoveShip = (type: ShipType) => {
     if (isFleetConfirmed) return
-    setShips((prev) => prev.filter((s) => s.type !== type))
+    const nextShips = ships.filter((s) => s.type !== type)
+    setShips(nextShips)
+    syncDraftFleet?.(nextShips)
     if (selectedShipType === type) {
       setSelectedShipType(null)
     }
@@ -314,6 +316,7 @@ export const PlacementScreen: React.FC = () => {
     if (isFleetConfirmed) return
     const randomFleet = generateRandomFleet()
     setShips(randomFleet)
+    syncDraftFleet?.(randomFleet)
     setSelectedShipType(null)
   }
 
@@ -321,6 +324,7 @@ export const PlacementScreen: React.FC = () => {
   const handleReset = () => {
     if (isFleetConfirmed) return
     setShips([])
+    syncDraftFleet?.([])
     setSelectedShipType(null)
   }
 

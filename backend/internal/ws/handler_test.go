@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/azbagas/battleship/backend/internal/game"
 	"github.com/azbagas/battleship/backend/internal/lobby"
+	"github.com/azbagas/battleship/backend/internal/store"
 )
 
 func setupTestServer(t *testing.T, opts ...lobby.Option) (*httptest.Server, *lobby.SessionRegistry, *lobby.LobbyManager) {
@@ -1682,5 +1684,493 @@ func TestHandler_GracefulShutdown(t *testing.T) {
 	}
 	if resp != nil && resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("expected status 503 Service Unavailable, got %d", resp.StatusCode)
+	}
+}
+
+// advanceTwoClientsToBattle connects Host and Guest, creates/joins a room, readies both,
+// submits their fleets, and returns both connections and the starting turn player ID.
+func advanceTwoClientsToBattle(
+	t *testing.T,
+	ctx context.Context,
+	serverURL string,
+	hostName string,
+	guestName string,
+) (*websocket.Conn, HelloOKPayload, *websocket.Conn, HelloOKPayload, string, string) {
+	t.Helper()
+
+	connHost, playerHost, _ := connectAndHandshake(t, ctx, serverURL, hostName, "")
+	connGuest, playerGuest, _ := connectAndHandshake(t, ctx, serverURL, guestName, "")
+
+	mustWriteJSON(t, ctx, connHost, OutboundMessage{Type: TypeLobbyCreate, Payload: map[string]any{}})
+	_, pCreate := drainUntilType(t, ctx, connHost, TypeRoomState)
+	var hostRoom lobby.RoomStateView
+	if err := json.Unmarshal(pCreate, &hostRoom); err != nil {
+		t.Fatalf("unmarshal host room.state: %v", err)
+	}
+	roomID := hostRoom.RoomID
+
+	mustWriteJSON(t, ctx, connGuest, OutboundMessage{
+		Type:    TypeLobbyJoin,
+		Payload: LobbyJoinPayload{RoomID: roomID},
+	})
+	_, _ = drainUntilType(t, ctx, connHost, TypeRoomReadyState)
+	_, _ = drainUntilType(t, ctx, connGuest, TypeRoomReadyState)
+
+	mustWriteJSON(t, ctx, connHost, OutboundMessage{Type: TypeRoomReady, Payload: map[string]any{}})
+	mustWriteJSON(t, ctx, connGuest, OutboundMessage{Type: TypeRoomReady, Payload: map[string]any{}})
+
+	_, _ = drainUntilType(t, ctx, connHost, TypeRoomState)
+	_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+
+	mustWriteJSON(t, ctx, connHost, OutboundMessage{
+		Type:    TypePlacementSubmit,
+		Payload: PlacementSubmitPayload{Ships: testFleetForWS()},
+	})
+	_, _ = drainUntilType(t, ctx, connHost, TypePlacementConfirmed)
+	_, _ = drainUntilType(t, ctx, connGuest, TypePlacementOpponentReady)
+
+	mustWriteJSON(t, ctx, connGuest, OutboundMessage{
+		Type:    TypePlacementSubmit,
+		Payload: PlacementSubmitPayload{Ships: testGuestFleetForWS()},
+	})
+
+	_, pTurnH := drainUntilType(t, ctx, connHost, TypeBattleTurn)
+	_, _ = drainUntilType(t, ctx, connGuest, TypeBattleTurn)
+	_, _ = drainUntilType(t, ctx, connHost, TypeRoomState)
+	_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+
+	var turnPayload BattleTurnPayload
+	if err := json.Unmarshal(pTurnH, &turnPayload); err != nil {
+		t.Fatalf("unmarshal battle.turn: %v", err)
+	}
+
+	return connHost, playerHost, connGuest, playerGuest, roomID, turnPayload.TurnPlayerID
+}
+
+func TestWebSocket_TwoClientFullGameAndPersistence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	dbPath := filepath.Join(t.TempDir(), "integration_full_game.db")
+	st, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = st.Close()
+	})
+
+	server, _, mgr := setupTestServer(t, lobby.WithStore(st))
+
+	connHost, playerHost, connGuest, playerGuest, roomID, currentTurnID := advanceTwoClientsToBattle(
+		t, ctx, server.URL, "AdmiralNimitz", "CaptainHalsey",
+	)
+	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
+	defer func() { _ = connGuest.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Guest fleet occupies:
+	// Carrier (5): (5,0)..(5,4)
+	// Battleship (4): (6,0)..(6,3)
+	// Cruiser (3): (7,0)..(7,2)
+	// Submarine (3): (8,0)..(8,2)
+	// Destroyer (2): (9,0)..(9,1)
+	guestShipCells := []game.Coord{
+		{X: 5, Y: 0}, {X: 5, Y: 1}, {X: 5, Y: 2}, {X: 5, Y: 3}, {X: 5, Y: 4},
+		{X: 6, Y: 0}, {X: 6, Y: 1}, {X: 6, Y: 2}, {X: 6, Y: 3},
+		{X: 7, Y: 0}, {X: 7, Y: 1}, {X: 7, Y: 2},
+		{X: 8, Y: 0}, {X: 8, Y: 1}, {X: 8, Y: 2},
+		{X: 9, Y: 0}, {X: 9, Y: 1},
+	}
+
+	// If Guest goes first, have Guest fire an initial miss at (0,9) so Host takes the offensive lead
+	guestMissIdx := 0
+	guestMissCoords := func() game.Coord {
+		c := game.Coord{X: guestMissIdx % 10, Y: 7 + (guestMissIdx / 10)}
+		guestMissIdx++
+		return c
+	}
+
+	if currentTurnID == playerGuest.PlayerID {
+		missCell := guestMissCoords()
+		mustWriteJSON(t, ctx, connGuest, OutboundMessage{
+			Type:    TypeBattleFire,
+			Payload: BattleFirePayload{Cell: missCell},
+		})
+		_, _ = drainUntilType(t, ctx, connHost, TypeRoomState)
+		_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+	}
+
+	sunkCount := 0
+	var hostGameOver, guestGameOver GameOverPayload
+
+	for i, targetCell := range guestShipCells {
+		mustWriteJSON(t, ctx, connHost, OutboundMessage{
+			Type:    TypeBattleFire,
+			Payload: BattleFirePayload{Cell: targetCell},
+		})
+
+		_, pShotH := drainUntilType(t, ctx, connHost, TypeBattleShotResult)
+		var shotRes BattleShotResultPayload
+		if err := json.Unmarshal(pShotH, &shotRes); err != nil {
+			t.Fatalf("unmarshal shotResult at step %d: %v", i, err)
+		}
+		if shotRes.By != playerHost.PlayerID {
+			t.Fatalf("expected shot by host %s, got %s", playerHost.PlayerID, shotRes.By)
+		}
+		if shotRes.Result == game.ShotResultSunk {
+			sunkCount++
+			if shotRes.SunkShip == nil || len(shotRes.SunkShip.Cells) == 0 {
+				t.Fatalf("expected sunkShip details on sunk shot at step %d", i)
+			}
+		} else if shotRes.Result != game.ShotResultHit {
+			t.Fatalf("expected hit or sunk at %v, got %s", targetCell, shotRes.Result)
+		}
+
+		isFinalShot := i == len(guestShipCells)-1
+		if isFinalShot {
+			_, pOverH := drainUntilType(t, ctx, connHost, TypeGameOver)
+			_, pOverG := drainUntilType(t, ctx, connGuest, TypeGameOver)
+			_ = json.Unmarshal(pOverH, &hostGameOver)
+			_ = json.Unmarshal(pOverG, &guestGameOver)
+			_, _ = drainUntilType(t, ctx, connHost, TypeRoomState)
+			_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+		} else {
+			_, pStateH := drainUntilType(t, ctx, connHost, TypeRoomState)
+			_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+
+			// Verify zero coordinate leakage of unrevealed opponent ships in raw JSON
+			var rawView map[string]any
+			_ = json.Unmarshal(pStateH, &rawView)
+			if bv, ok := rawView["battleView"].(map[string]any); ok {
+				if tb, ok := bv["targetBoard"].(map[string]any); ok {
+					if _, leaked := tb["ships"]; leaked {
+						t.Fatal("SECURITY LEAK: targetBoard leaked opponent ships array during battle")
+					}
+				}
+			}
+
+			// Guest fires a miss on their turn
+			missCell := guestMissCoords()
+			mustWriteJSON(t, ctx, connGuest, OutboundMessage{
+				Type:    TypeBattleFire,
+				Payload: BattleFirePayload{Cell: missCell},
+			})
+			_, _ = drainUntilType(t, ctx, connHost, TypeRoomState)
+			_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+		}
+	}
+
+	if sunkCount != 5 {
+		t.Errorf("expected 5 sunk ships across full game, got %d", sunkCount)
+	}
+	if hostGameOver.WinnerPlayerID != playerHost.PlayerID || hostGameOver.Reason != "all_sunk" {
+		t.Errorf("unexpected host game.over payload: %+v", hostGameOver)
+	}
+	if guestGameOver.WinnerPlayerID != playerHost.PlayerID || guestGameOver.Reason != "all_sunk" {
+		t.Errorf("unexpected guest game.over payload: %+v", guestGameOver)
+	}
+	expectedTotalShots := len(guestShipCells) + guestMissIdx
+	if hostGameOver.TotalShots != expectedTotalShots {
+		t.Errorf("expected TotalShots %d, got %d", expectedTotalShots, hostGameOver.TotalShots)
+	}
+
+	// Verify SQLite persistence wrote the finished match record
+	gameID := mgr.GetRoomGameIDForTesting(roomID)
+	if gameID == "" {
+		t.Fatal("expected non-empty gameID on finished room")
+	}
+
+	var savedRecord *store.GameRecord
+	for attempt := 0; attempt < 25; attempt++ {
+		rec, getErr := st.GetGame(ctx, gameID)
+		if getErr == nil && rec != nil {
+			savedRecord = rec
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if savedRecord == nil {
+		t.Fatalf("expected finished game %s to be persisted in SQLite store", gameID)
+	}
+	if savedRecord.EndReason != "all_sunk" {
+		t.Errorf("expected persisted EndReason 'all_sunk', got %q", savedRecord.EndReason)
+	}
+	if savedRecord.Player1Name != "AdmiralNimitz" || savedRecord.Player2Name != "CaptainHalsey" {
+		t.Errorf("unexpected persisted player names: %q vs %q", savedRecord.Player1Name, savedRecord.Player2Name)
+	}
+	if savedRecord.WinnerSlot == nil || *savedRecord.WinnerSlot != 1 {
+		t.Errorf("expected WinnerSlot 1 (host), got %v", savedRecord.WinnerSlot)
+	}
+	if savedRecord.TotalShots != expectedTotalShots {
+		t.Errorf("expected persisted TotalShots %d, got %d", expectedTotalShots, savedRecord.TotalShots)
+	}
+}
+
+func TestWebSocket_TwoClientBattleReconnectAndResume(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	server, _, _ := setupTestServer(t)
+
+	connHost, playerHost, connGuest, playerGuest, roomID, currentTurnID := advanceTwoClientsToBattle(
+		t, ctx, server.URL, "HostReconnect", "GuestReconnect",
+	)
+	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Fire 2 alternating shots so shotLog and board state are populated
+	firstConn := connHost
+	secondConn := connGuest
+	if currentTurnID == playerGuest.PlayerID {
+		firstConn = connGuest
+		secondConn = connHost
+	}
+
+	mustWriteJSON(t, ctx, firstConn, OutboundMessage{
+		Type:    TypeBattleFire,
+		Payload: BattleFirePayload{Cell: game.Coord{X: 0, Y: 9}},
+	})
+	_, _ = drainUntilType(t, ctx, connHost, TypeRoomState)
+	_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+
+	mustWriteJSON(t, ctx, secondConn, OutboundMessage{
+		Type:    TypeBattleFire,
+		Payload: BattleFirePayload{Cell: game.Coord{X: 1, Y: 9}},
+	})
+	_, _ = drainUntilType(t, ctx, connHost, TypeRoomState)
+	_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+
+	// Guest drops WebSocket connection mid-battle
+	_ = connGuest.Close(websocket.StatusNormalClosure, "simulated network drop")
+
+	// Host receives opponent.disconnected with graceDeadline
+	_, pDisc := drainUntilType(t, ctx, connHost, TypeOpponentDisconnected)
+	var discPayload OpponentDisconnectedPayload
+	if err := json.Unmarshal(pDisc, &discPayload); err != nil {
+		t.Fatalf("unmarshal opponent.disconnected: %v", err)
+	}
+	if discPayload.GraceDeadline.IsZero() {
+		t.Error("expected non-zero graceDeadline on opponent.disconnected")
+	}
+
+	// Guest reconnects within 60s grace period using sessionToken
+	connGuestReconnected, helloOKGuest, _ := connectAndHandshake(
+		t, ctx, server.URL, "GuestReconnect", playerGuest.SessionToken,
+	)
+	defer func() { _ = connGuestReconnected.Close(websocket.StatusNormalClosure, "done") }()
+
+	if helloOKGuest.RestoredState == nil {
+		t.Fatal("expected non-nil restoredState in hello.ok upon battle reconnect")
+	}
+
+	restoredBytes, _ := json.Marshal(helloOKGuest.RestoredState)
+	var restoredView lobby.RoomStateView
+	if err := json.Unmarshal(restoredBytes, &restoredView); err != nil {
+		t.Fatalf("unmarshal restoredState: %v", err)
+	}
+	if restoredView.RoomID != roomID || restoredView.Phase != lobby.PhaseBattle {
+		t.Fatalf("expected restored room %s in phase battle, got room=%s phase=%s", roomID, restoredView.RoomID, restoredView.Phase)
+	}
+	if len(restoredView.ShotLog) != 2 {
+		t.Errorf("expected 2 shots in restored ShotLog, got %d", len(restoredView.ShotLog))
+	}
+	if restoredView.BattleView == nil {
+		t.Fatal("expected BattleView in restoredState")
+	}
+
+	// Host receives opponent.reconnected
+	_, _ = drainUntilType(t, ctx, connHost, TypeOpponentReconnected)
+	// Guest also receives room.state after hello.ok
+	_, _ = drainUntilType(t, ctx, connGuestReconnected, TypeRoomState)
+
+	// Verify battle resumes cleanly: active player fires another shot
+	activeConn := connHost
+	if restoredView.TurnPlayerID == playerGuest.PlayerID {
+		activeConn = connGuestReconnected
+	}
+	mustWriteJSON(t, ctx, activeConn, OutboundMessage{
+		Type:    TypeBattleFire,
+		Payload: BattleFirePayload{Cell: game.Coord{X: 2, Y: 9}},
+	})
+
+	_, pShotHost := drainUntilType(t, ctx, connHost, TypeBattleShotResult)
+	_, pShotGuest := drainUntilType(t, ctx, connGuestReconnected, TypeBattleShotResult)
+	var shotHost, shotGuest BattleShotResultPayload
+	_ = json.Unmarshal(pShotHost, &shotHost)
+	_ = json.Unmarshal(pShotGuest, &shotGuest)
+
+	if shotHost.Cell != (game.Coord{X: 2, Y: 9}) || shotGuest.Cell != (game.Coord{X: 2, Y: 9}) {
+		t.Errorf("expected resumed shot at (2,9), got host=%v guest=%v", shotHost.Cell, shotGuest.Cell)
+	}
+	_ = playerHost
+}
+
+func TestWebSocket_TwoClientFullGameAndRematch(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	server, _, _ := setupTestServer(t)
+
+	connHost, playerHost, connGuest, playerGuest, _, currentTurnID := advanceTwoClientsToBattle(
+		t, ctx, server.URL, "HostRematchFull", "GuestRematchFull",
+	)
+	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
+	defer func() { _ = connGuest.Close(websocket.StatusNormalClosure, "done") }()
+
+	guestShipCells := []game.Coord{
+		{X: 5, Y: 0}, {X: 5, Y: 1}, {X: 5, Y: 2}, {X: 5, Y: 3}, {X: 5, Y: 4},
+		{X: 6, Y: 0}, {X: 6, Y: 1}, {X: 6, Y: 2}, {X: 6, Y: 3},
+		{X: 7, Y: 0}, {X: 7, Y: 1}, {X: 7, Y: 2},
+		{X: 8, Y: 0}, {X: 8, Y: 1}, {X: 8, Y: 2},
+		{X: 9, Y: 0}, {X: 9, Y: 1},
+	}
+
+	missIdx := 0
+	if currentTurnID == playerGuest.PlayerID {
+		mustWriteJSON(t, ctx, connGuest, OutboundMessage{
+			Type:    TypeBattleFire,
+			Payload: BattleFirePayload{Cell: game.Coord{X: missIdx % 10, Y: 7 + (missIdx / 10)}},
+		})
+		missIdx++
+		_, _ = drainUntilType(t, ctx, connHost, TypeRoomState)
+		_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+	}
+
+	for i, target := range guestShipCells {
+		mustWriteJSON(t, ctx, connHost, OutboundMessage{
+			Type:    TypeBattleFire,
+			Payload: BattleFirePayload{Cell: target},
+		})
+		if i == len(guestShipCells)-1 {
+			_, _ = drainUntilType(t, ctx, connHost, TypeGameOver)
+			_, _ = drainUntilType(t, ctx, connGuest, TypeGameOver)
+			_, _ = drainUntilType(t, ctx, connHost, TypeRoomState)
+			_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+		} else {
+			_, _ = drainUntilType(t, ctx, connHost, TypeRoomState)
+			_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+
+			mustWriteJSON(t, ctx, connGuest, OutboundMessage{
+				Type:    TypeBattleFire,
+				Payload: BattleFirePayload{Cell: game.Coord{X: missIdx % 10, Y: 7 + (missIdx / 10)}},
+			})
+			missIdx++
+			_, _ = drainUntilType(t, ctx, connHost, TypeRoomState)
+			_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+		}
+	}
+
+	// Game 1 finished via all_sunk. Now both players accept a rematch over WebSockets.
+	mustWriteJSON(t, ctx, connHost, OutboundMessage{Type: TypeRematchAccept, Payload: map[string]any{}})
+	_, pOffer := drainUntilType(t, ctx, connGuest, TypeRematchOffered)
+	var offered RematchOfferedPayload
+	_ = json.Unmarshal(pOffer, &offered)
+	if offered.By != playerHost.PlayerID {
+		t.Fatalf("expected rematch.offered by host %s, got %s", playerHost.PlayerID, offered.By)
+	}
+
+	mustWriteJSON(t, ctx, connGuest, OutboundMessage{Type: TypeRematchAccept, Payload: map[string]any{}})
+
+	// Both transition directly to placement for Game 2
+	_, pHostRematchState := drainUntilType(t, ctx, connHost, TypeRoomState)
+	_, pGuestRematchState := drainUntilType(t, ctx, connGuest, TypeRoomState)
+
+	var hostPlacementView, guestPlacementView lobby.RoomStateView
+	_ = json.Unmarshal(pHostRematchState, &hostPlacementView)
+	_ = json.Unmarshal(pGuestRematchState, &guestPlacementView)
+
+	if hostPlacementView.Phase != lobby.PhasePlacement || guestPlacementView.Phase != lobby.PhasePlacement {
+		t.Fatalf("expected both players in placement phase after mutual rematch, got host=%s guest=%s",
+			hostPlacementView.Phase, guestPlacementView.Phase)
+	}
+	if len(hostPlacementView.ShotLog) != 0 {
+		t.Errorf("expected ShotLog reset on rematch, got %d entries", len(hostPlacementView.ShotLog))
+	}
+
+	// Both submit fleets in Game 2 and verify battle.start fires
+	mustWriteJSON(t, ctx, connHost, OutboundMessage{
+		Type:    TypePlacementSubmit,
+		Payload: PlacementSubmitPayload{Ships: testFleetForWS()},
+	})
+	mustWriteJSON(t, ctx, connGuest, OutboundMessage{
+		Type:    TypePlacementSubmit,
+		Payload: PlacementSubmitPayload{Ships: testGuestFleetForWS()},
+	})
+
+	_, _ = drainUntilType(t, ctx, connHost, TypeBattleStart)
+	_, _ = drainUntilType(t, ctx, connGuest, TypeBattleStart)
+}
+
+func TestWebSocket_DraftPlacementPreservedOnTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	clock := lobby.NewMockClock(time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC))
+	server, _, _ := setupTestServer(t, lobby.WithClock(clock))
+
+	connHost, _, _ := connectAndHandshake(t, ctx, server.URL, "DraftHost", "")
+	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
+
+	connGuest, _, _ := connectAndHandshake(t, ctx, server.URL, "DraftGuest", "")
+	defer func() { _ = connGuest.Close(websocket.StatusNormalClosure, "done") }()
+
+	mustWriteJSON(t, ctx, connHost, OutboundMessage{Type: TypeLobbyCreate, Payload: map[string]any{}})
+	_, pCreate := drainUntilType(t, ctx, connHost, TypeRoomState)
+	var hostRoom lobby.RoomStateView
+	_ = json.Unmarshal(pCreate, &hostRoom)
+
+	mustWriteJSON(t, ctx, connGuest, OutboundMessage{
+		Type:    TypeLobbyJoin,
+		Payload: LobbyJoinPayload{RoomID: hostRoom.RoomID},
+	})
+	_, _ = drainUntilType(t, ctx, connHost, TypeRoomReadyState)
+	_, _ = drainUntilType(t, ctx, connGuest, TypeRoomReadyState)
+
+	mustWriteJSON(t, ctx, connHost, OutboundMessage{Type: TypeRoomReady, Payload: map[string]any{}})
+	mustWriteJSON(t, ctx, connGuest, OutboundMessage{Type: TypeRoomReady, Payload: map[string]any{}})
+
+	_, _ = drainUntilType(t, ctx, connHost, TypeRoomState)
+	_, _ = drainUntilType(t, ctx, connGuest, TypeRoomState)
+
+	// Host places 2 ships as a draft (unconfirmed)
+	draftShips := []game.PlacedShip{
+		{Type: game.ShipCarrier, Origin: game.Coord{X: 2, Y: 2}, Orientation: game.OrientationHorizontal},
+		{Type: game.ShipDestroyer, Origin: game.Coord{X: 7, Y: 8}, Orientation: game.OrientationVertical},
+	}
+	mustWriteJSON(t, ctx, connHost, OutboundMessage{
+		Type: TypePlacementSubmit,
+		Payload: PlacementSubmitPayload{
+			Ships: draftShips,
+			Draft: true,
+		},
+	})
+
+	// Allow the draft message to be processed before advancing the clock
+	time.Sleep(50 * time.Millisecond)
+
+	// Advance clock by 60s to trigger placement timeout auto-completion
+	clock.Advance(60 * time.Second)
+
+	_, pConf := drainUntilType(t, ctx, connHost, TypePlacementConfirmed)
+	var confPayload PlacementConfirmedPayload
+	if err := json.Unmarshal(pConf, &confPayload); err != nil {
+		t.Fatalf("unmarshal placement.confirmed: %v", err)
+	}
+	if !confPayload.Confirmed || !confPayload.Auto || len(confPayload.Ships) != 5 {
+		t.Fatalf("expected auto-confirmed 5-ship fleet, got %+v", confPayload)
+	}
+
+	// Verify the 2 draft ships were preserved untouched
+	sawCarrier := false
+	sawDestroyer := false
+	for _, s := range confPayload.Ships {
+		if s.Type == game.ShipCarrier && s.Origin == (game.Coord{X: 2, Y: 2}) && s.Orientation == game.OrientationHorizontal {
+			sawCarrier = true
+		}
+		if s.Type == game.ShipDestroyer && s.Origin == (game.Coord{X: 7, Y: 8}) && s.Orientation == game.OrientationVertical {
+			sawDestroyer = true
+		}
+	}
+	if !sawCarrier || !sawDestroyer {
+		t.Errorf("expected draft ships to be preserved on 60s placement timeout, got fleet: %+v", confPayload.Ships)
 	}
 }

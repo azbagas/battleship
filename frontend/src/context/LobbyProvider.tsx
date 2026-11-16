@@ -163,11 +163,25 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
             setTurnDeadline(state.turnDeadline)
           }
           if (state.winnerPlayerId) {
-            setGameOverResult({
-              winnerPlayerId: state.winnerPlayerId,
+            const shotCount = Array.isArray(state.shotLog) ? state.shotLog.length : 0
+            setGameOverResult((prev) => ({
+              winnerPlayerId: state.winnerPlayerId!,
               reason: state.endReason || 'all_sunk',
-              totalShots: 0,
-            })
+              totalShots: shotCount > 0 ? shotCount : (prev?.totalShots ?? 0),
+            }))
+          }
+          if (Array.isArray(state.shotLog) && state.shotLog.length > 0) {
+            const mappedEvents: BattleShotResultPayload[] = state.shotLog
+              .slice(-20)
+              .reverse()
+              .map((rec) => ({
+                by: rec.shooterId,
+                cell: rec.cell,
+                result: rec.result,
+                sunkShip: rec.sunkShip,
+                auto: rec.auto,
+              }))
+            setRecentEvents(mappedEvents)
           }
           if (state.battleView) {
             if (Array.isArray(state.battleView.targetBoard?.shots)) {
@@ -294,11 +308,25 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
         setTurnDeadline(payload.turnDeadline)
       }
       if (payload.winnerPlayerId) {
-        setGameOverResult({
-          winnerPlayerId: payload.winnerPlayerId,
+        const shotCount = Array.isArray(payload.shotLog) ? payload.shotLog.length : 0
+        setGameOverResult((prev) => ({
+          winnerPlayerId: payload.winnerPlayerId!,
           reason: payload.endReason || 'all_sunk',
-          totalShots: 0,
-        })
+          totalShots: shotCount > 0 ? shotCount : (prev?.totalShots ?? 0),
+        }))
+      }
+      if (Array.isArray(payload.shotLog) && payload.shotLog.length > 0) {
+        const mappedEvents: BattleShotResultPayload[] = payload.shotLog
+          .slice(-20)
+          .reverse()
+          .map((rec) => ({
+            by: rec.shooterId,
+            cell: rec.cell,
+            result: rec.result,
+            sunkShip: rec.sunkShip,
+            auto: rec.auto,
+          }))
+        setRecentEvents(mappedEvents)
       }
       if (payload.battleView) {
         if (Array.isArray(payload.battleView.targetBoard?.shots)) {
@@ -589,6 +617,14 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
     [activeRoom, client],
   )
 
+  const syncDraftFleet = useCallback(
+    (ships: PlacedShip[]) => {
+      if (!activeRoom || activeRoom.phase !== 'placement' || isFleetConfirmed) return
+      client.send('placement.submit', { ships, draft: true })
+    },
+    [activeRoom, isFleetConfirmed, client],
+  )
+
   const fireShot = useCallback(
     (cell: Coord) => {
       if (!isMyTurn || gameOverResult) return
@@ -634,6 +670,7 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       ownFleet,
       placementDeadline,
       submitFleet,
+      syncDraftFleet,
       turnPlayerId,
       turnDeadline,
       isMyTurn,
@@ -677,6 +714,7 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       ownFleet,
       placementDeadline,
       submitFleet,
+      syncDraftFleet,
       turnPlayerId,
       turnDeadline,
       isMyTurn,

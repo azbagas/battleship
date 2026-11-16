@@ -43,6 +43,7 @@ export interface LobbyContextValue {
   ownFleet: PlacedShip[]
   placementDeadline: string | null
   submitFleet: (ships: PlacedShip[]) => void
+  syncDraftFleet?: (ships: PlacedShip[]) => void
 
   // Battle phase controls & state
   turnPlayerId: string | null

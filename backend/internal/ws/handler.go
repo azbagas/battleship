@@ -341,6 +341,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 			}
+			if submitPayload.Draft {
+				if err := h.lobby.UpdateDraftFleet(player.ID, submitPayload.Ships); err != nil {
+					h.handleLobbyError(sender, player.ID, inbound.Type, err)
+				}
+				continue
+			}
 			if err := h.lobby.SubmitFleet(player.ID, submitPayload.Ships); err != nil {
 				h.handleLobbyError(sender, player.ID, inbound.Type, err)
 			}

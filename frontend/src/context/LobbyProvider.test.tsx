@@ -516,5 +516,69 @@ describe('LobbyProvider', () => {
 
     expect(result.current.serverRestartNotice).toBeNull()
   })
+
+  it('sends draft placement sync and preserves totalShots and recentEvents on room.state', () => {
+    const { result } = renderHook(() => useLobby(), { wrapper })
+
+    const roomStateHandler = messageHandlers.get('room.state')
+    const gameOverHandler = messageHandlers.get('game.over')
+
+    act(() => {
+      roomStateHandler!({
+        roomId: 'r_draft1',
+        phase: 'placement',
+        role: 'host',
+        host: { id: 'p1', name: 'Admiral Nimitz' },
+        guest: { id: 'p2', name: 'Commander Spock' },
+        createdAt: '2026-11-10T12:00:00Z',
+      })
+    })
+
+    const draftShips = [
+      { type: 'carrier' as const, origin: { x: 0, y: 0 }, orientation: 'horizontal' as const },
+    ]
+    act(() => {
+      result.current.syncDraftFleet?.(draftShips)
+    })
+    expect(mockClient.send).toHaveBeenCalledWith('placement.submit', {
+      ships: draftShips,
+      draft: true,
+    })
+
+    // Simulate game.over followed by room.state with shotLog
+    act(() => {
+      gameOverHandler!({
+        winnerPlayerId: 'p1',
+        reason: 'all_sunk',
+        totalShots: 25,
+      })
+      roomStateHandler!({
+        roomId: 'r_draft1',
+        phase: 'finished',
+        role: 'host',
+        host: { id: 'p1', name: 'Admiral Nimitz' },
+        guest: { id: 'p2', name: 'Commander Spock' },
+        winnerPlayerId: 'p1',
+        endReason: 'all_sunk',
+        shotLog: [
+          {
+            shooterId: 'p1',
+            cell: { x: 0, y: 0 },
+            result: 'hit',
+          },
+          {
+            shooterId: 'p2',
+            cell: { x: 1, y: 1 },
+            result: 'miss',
+          },
+        ],
+        createdAt: '2026-11-10T12:00:00Z',
+      })
+    })
+
+    expect(result.current.gameOverResult?.totalShots).toBe(2)
+    expect(result.current.recentEvents).toHaveLength(2)
+    expect(result.current.recentEvents[0].cell).toEqual({ x: 1, y: 1 })
+  })
 })
 

@@ -173,7 +173,7 @@ Leaves the room during ready-up.
 
 ### 5.4 Placement Phase
 #### `placement.submit` / `placement.ready`
-Submits and locks in fleet coordinates (Carrier 5, Battleship 4, Cruiser 3, Submarine 3, Destroyer 2).
+Submits and locks in fleet coordinates (Carrier 5, Battleship 4, Cruiser 3, Submarine 3, Destroyer 2). When `"draft": true` is passed, partial placements (0–5 ships) are saved on the server without locking the fleet so that 60-second timeout auto-placement and mid-placement reconnects preserve already-placed vessels.
 ```json
 {
   "type": "placement.submit",
@@ -184,7 +184,8 @@ Submits and locks in fleet coordinates (Carrier 5, Battleship 4, Cruiser 3, Subm
       { "type": "cruiser", "origin": { "x": 0, "y": 4 }, "orientation": "vertical" },
       { "type": "submarine", "origin": { "x": 3, "y": 4 }, "orientation": "vertical" },
       { "type": "destroyer", "origin": { "x": 6, "y": 6 }, "orientation": "horizontal" }
-    ]
+    ],
+    "draft": false
   }
 }
 ```
