@@ -11,6 +11,7 @@ A browser-based, real-time, two-player online Battleship game built as a React/T
 - [Architecture](docs/ARCHITECTURE.md): Technical architecture, data model, and invariants.
 - [Protocol Specification](docs/PROTOCOL.md): WebSocket wire protocol, state transitions, message schemas, and error codes.
 - [Tasks](docs/TASKS.md): Current development plan and task progress.
+- [Changelog](CHANGELOG.md): Release history and version notes.
 
 ## Prerequisites
 - [Go](https://go.dev/) 1.26+
