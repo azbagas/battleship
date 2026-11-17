@@ -4,4 +4,12 @@ bin
 *.out
 server
 .git
+.env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
 

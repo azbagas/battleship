@@ -17,21 +17,123 @@ import (
 	"github.com/azbagas/battleship/backend/internal/lobby"
 )
 
+const (
+	defaultWriteTimeout = 5 * time.Second
+	defaultOutboxSize   = 64
+)
+
+type outboundFrame struct {
+	msgType string
+	payload any
+}
+
 // wsSender serializes outgoing WebSocket writes for a single client connection.
+// Pre-handshake frames write synchronously with a write timeout; post-handshake
+// frames enqueue onto a bounded outbox so slow consumers cannot block broadcasts.
 type wsSender struct {
-	mu   sync.Mutex
-	conn *websocket.Conn
-	ctx  context.Context
+	mu     sync.Mutex
+	conn   *websocket.Conn
+	ctx    context.Context
+	outbox chan outboundFrame
+	async  bool
+	closed bool
+	wg     sync.WaitGroup
+}
+
+// StartAsync transitions the sender to a bounded non-blocking outbox drained by a
+// dedicated writer goroutine tied to ctx.
+func (s *wsSender) StartAsync(ctx context.Context) {
+	s.mu.Lock()
+	if s.closed || s.async {
+		s.mu.Unlock()
+		return
+	}
+	s.async = true
+	s.outbox = make(chan outboundFrame, defaultOutboxSize)
+	s.wg.Add(1)
+	s.mu.Unlock()
+
+	go s.writeLoop(ctx)
+}
+
+func (s *wsSender) writeLoop(ctx context.Context) {
+	defer s.wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case frame, ok := <-s.outbox:
+			if !ok {
+				return
+			}
+			writeCtx, cancel := context.WithTimeout(ctx, defaultWriteTimeout)
+			err := writeJSON(writeCtx, s.conn, OutboundMessage{
+				Type:    MessageType(frame.msgType),
+				Payload: frame.payload,
+			})
+			cancel()
+			if err != nil {
+				s.closeOnSlowOrBroken("write failed")
+				return
+			}
+		}
+	}
+}
+
+func (s *wsSender) closeOnSlowOrBroken(reason string) {
+	s.mu.Lock()
+	if !s.closed {
+		s.closed = true
+		if s.async && s.outbox != nil {
+			close(s.outbox)
+		}
+	}
+	s.mu.Unlock()
+	_ = s.conn.Close(websocket.StatusGoingAway, reason)
+}
+
+// Stop closes the outbox (if active) and waits for the writer goroutine to exit.
+func (s *wsSender) Stop() {
+	s.mu.Lock()
+	if !s.closed {
+		s.closed = true
+		if s.async && s.outbox != nil {
+			close(s.outbox)
+		}
+	}
+	s.mu.Unlock()
+	s.wg.Wait()
 }
 
 // Send formats and transmits an outbound message envelope.
 func (s *wsSender) Send(msgType string, payload any) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return writeJSON(s.ctx, s.conn, OutboundMessage{
-		Type:    MessageType(msgType),
-		Payload: payload,
-	})
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("websocket sender closed")
+	}
+	if !s.async {
+		defer s.mu.Unlock()
+		writeCtx, cancel := context.WithTimeout(s.ctx, defaultWriteTimeout)
+		defer cancel()
+		return writeJSON(writeCtx, s.conn, OutboundMessage{
+			Type:    MessageType(msgType),
+			Payload: payload,
+		})
+	}
+
+	select {
+	case s.outbox <- outboundFrame{msgType: msgType, payload: payload}:
+		s.mu.Unlock()
+		return nil
+	default:
+		// Outbox is full: client is a slow consumer; detach it without blocking callers.
+		s.closed = true
+		close(s.outbox)
+		s.mu.Unlock()
+		_ = s.conn.Close(websocket.StatusGoingAway, "slow consumer")
+		return errors.New("outbound buffer full: slow consumer")
+	}
 }
 
 // HandlerOption configures Handler instances.
@@ -83,37 +185,56 @@ func WithRateLimit(rate, burst float64) HandlerOption {
 	}
 }
 
+// WithTrustProxy configures whether X-Real-IP / X-Forwarded-For headers are trusted
+// when identifying client IPs for rate and connection limits.
+func WithTrustProxy(trust bool) HandlerOption {
+	return func(h *Handler) {
+		h.trustProxy = trust
+	}
+}
+
+// WithHandshakeRateLimit configures the per-IP WebSocket upgrade rate limit.
+func WithHandshakeRateLimit(rate, burst float64) HandlerOption {
+	return func(h *Handler) {
+		h.handshakeLimiter = NewHandshakeLimiter(rate, burst)
+	}
+}
+
 // Handler manages WebSocket upgrades, handshake, and message dispatch.
 type Handler struct {
-	registry        *lobby.SessionRegistry
-	lobby           *lobby.LobbyManager
-	pingInterval    time.Duration
-	pingTimeout     time.Duration
-	originPatterns  []string
-	allowAllOrigins bool
-	maxPayloadBytes int64
-	rateLimit       float64
-	rateBurst       float64
-	ipTracker       *IPTracker
-	connsMu         sync.Mutex
-	activeConns     map[*websocket.Conn]struct{}
-	shuttingDown    atomic.Bool
+	registry         *lobby.SessionRegistry
+	lobby            *lobby.LobbyManager
+	pingInterval     time.Duration
+	pingTimeout      time.Duration
+	originPatterns   []string
+	allowAllOrigins  bool
+	trustProxy       bool
+	maxPayloadBytes  int64
+	rateLimit        float64
+	rateBurst        float64
+	ipTracker        *IPTracker
+	handshakeLimiter *HandshakeLimiter
+	connsMu          sync.Mutex
+	activeConns      map[*websocket.Conn]struct{}
+	shuttingDown     atomic.Bool
 }
 
 // NewHandler constructs a WebSocket Handler backed by SessionRegistry and LobbyManager.
 func NewHandler(registry *lobby.SessionRegistry, lobbyMgr *lobby.LobbyManager, opts ...HandlerOption) *Handler {
 	h := &Handler{
-		registry:        registry,
-		lobby:           lobbyMgr,
-		pingInterval:    15 * time.Second,
-		pingTimeout:     5 * time.Second,
-		originPatterns:  []string{"localhost:*", "127.0.0.1:*"},
-		allowAllOrigins: false,
-		maxPayloadBytes: 4096,
-		rateLimit:       10.0,
-		rateBurst:       20.0,
-		ipTracker:       NewIPTracker(10),
-		activeConns:     make(map[*websocket.Conn]struct{}),
+		registry:         registry,
+		lobby:            lobbyMgr,
+		pingInterval:     15 * time.Second,
+		pingTimeout:      5 * time.Second,
+		originPatterns:   []string{"localhost:*", "127.0.0.1:*"},
+		allowAllOrigins:  false,
+		trustProxy:       false,
+		maxPayloadBytes:  4096,
+		rateLimit:        10.0,
+		rateBurst:        20.0,
+		ipTracker:        NewIPTracker(10),
+		handshakeLimiter: NewHandshakeLimiter(5.0, 20.0),
+		activeConns:      make(map[*websocket.Conn]struct{}),
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -175,7 +296,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP := ExtractIP(r)
+	clientIP := ExtractClientIP(r, h.trustProxy)
+	if !h.handshakeLimiter.Allow(clientIP) {
+		slog.Warn("connection rejected: handshake rate limit exceeded", "remoteAddr", r.RemoteAddr, "ip", clientIP)
+		http.Error(w, "Too many connection attempts from your IP", http.StatusTooManyRequests)
+		return
+	}
 	if !h.ipTracker.Acquire(clientIP) {
 		slog.Warn("connection rejected: per-ip connection cap reached", "remoteAddr", r.RemoteAddr, "ip", clientIP)
 		http.Error(w, "Too many concurrent connections from your IP", http.StatusTooManyRequests)
@@ -215,7 +341,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionCtx, cancelSession := context.WithCancel(r.Context())
-	defer cancelSession()
+	defer func() {
+		cancelSession()
+		sender.Stop()
+	}()
 
 	if h.pingInterval > 0 {
 		go h.heartbeatLoop(sessionCtx, conn, player.ID)
@@ -254,7 +383,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handshake complete: register connection sender with lobby manager.
+	// Handshake complete: enable non-blocking outbound writer and register with lobby manager.
+	sender.StartAsync(sessionCtx)
 	h.lobby.RegisterConnection(player.ID, sender)
 
 	// If player is restored into an active room, also send room.state after hello.ok.
@@ -487,10 +617,10 @@ func (h *Handler) handleHandshake(ctx context.Context, conn *websocket.Conn, sen
 			_ = conn.Close(websocket.StatusPolicyViolation, "failed to attach session")
 			return nil, attachErr
 		} else {
-			// Successfully reconnected to existing session
+			// Successfully reconnected to existing session.
+			// Only allow display name updates when the player is not in an active room/match.
 			player = attached
-			// If name supplied, attempt updating display name
-			if payload.Name != "" {
+			if payload.Name != "" && player.CurrentRoomID == "" {
 				if updateErr := h.registry.UpdateDisplayName(player.SessionToken, payload.Name); updateErr == nil {
 					if updated, ok := h.registry.GetByToken(player.SessionToken); ok {
 						player = updated

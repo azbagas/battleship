@@ -2,14 +2,13 @@ package game
 
 import (
 	"math/rand"
-	"time"
 )
 
 // ChooseFirstPlayer randomly selects one of two player IDs to take the opening turn.
-// If rng is nil, a new local random generator seeded with current time is used.
+// If rng is nil, a cryptographically backed RNG is used.
 func ChooseFirstPlayer(playerA, playerB string, rng *rand.Rand) string {
 	if rng == nil {
-		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+		rng = NewCryptoSeededRNG()
 	}
 	if rng.Intn(2) == 0 {
 		return playerA
@@ -22,7 +21,7 @@ func ChooseFirstPlayer(playerA, playerB string, rng *rand.Rand) string {
 // Returns ErrNoUntargetedCells if all 100 cells on the grid have already been targeted.
 func RandomUntargetedCell(board *Board, rng *rand.Rand) (Coord, error) {
 	if rng == nil {
-		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+		rng = NewCryptoSeededRNG()
 	}
 
 	untargeted := make([]Coord, 0, GridWidth*GridHeight)

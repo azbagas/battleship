@@ -18,9 +18,15 @@ FROM alpine:3.20
 
 WORKDIR /app
 
-RUN apk --no-cache add ca-certificates wget
+RUN apk --no-cache add ca-certificates wget \
+    && addgroup -S appgroup \
+    && adduser -S appuser -G appgroup \
+    && mkdir -p /app/data \
+    && chown -R appuser:appgroup /app
 
-COPY --from=builder /app/server /app/server
+COPY --from=builder --chown=appuser:appgroup /app/server /app/server
+
+USER appuser
 
 EXPOSE 8080
 

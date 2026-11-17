@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -44,19 +45,51 @@ func (p *Player) clone() *Player {
 	return &cp
 }
 
+const (
+	defaultIdleSessionTTL = 5 * time.Minute
+	defaultMaxSessions    = 2000
+)
+
+// SessionOption configures a SessionRegistry instance.
+type SessionOption func(*SessionRegistry)
+
+// WithIdleSessionTTL sets how long disconnected, roomless sessions remain resumable before pruning.
+// A duration <= 0 disables age-based pruning.
+func WithIdleSessionTTL(ttl time.Duration) SessionOption {
+	return func(r *SessionRegistry) {
+		r.idleSessionTTL = ttl
+	}
+}
+
+// WithMaxSessions sets the upper bound of stored sessions before oldest idle disconnected sessions are evicted.
+// A limit <= 0 disables the cap.
+func WithMaxSessions(max int) SessionOption {
+	return func(r *SessionRegistry) {
+		r.maxSessions = max
+	}
+}
+
 // SessionRegistry manages active and disconnected player sessions in memory.
 type SessionRegistry struct {
-	mu      sync.RWMutex
-	byToken map[string]*Player
-	byID    map[string]*Player
+	mu             sync.RWMutex
+	byToken        map[string]*Player
+	byID           map[string]*Player
+	idleSessionTTL time.Duration
+	maxSessions    int
 }
 
 // NewSessionRegistry constructs an empty SessionRegistry.
-func NewSessionRegistry() *SessionRegistry {
-	return &SessionRegistry{
-		byToken: make(map[string]*Player),
-		byID:    make(map[string]*Player),
+func NewSessionRegistry(opts ...SessionOption) *SessionRegistry {
+	r := &SessionRegistry{
+		byToken:        make(map[string]*Player),
+		byID:           make(map[string]*Player),
+		idleSessionTTL: defaultIdleSessionTTL,
+		maxSessions:    defaultMaxSessions,
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // generateSecureToken creates an unguessable 32-byte URL-safe base64 string.
@@ -105,10 +138,79 @@ func (r *SessionRegistry) CreatePlayer(rawDisplayName string) (*Player, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.pruneIdleLocked(time.Now().UTC())
+
 	r.byToken[token] = player
 	r.byID[playerID] = player
 
 	return player.clone(), nil
+}
+
+// PruneExpiredDisconnected removes disconnected sessions that have no active room
+// and whose DisconnectedAt timestamp is strictly before cutoff.
+func (r *SessionRegistry) PruneExpiredDisconnected(cutoff time.Time) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pruneExpiredLocked(cutoff)
+}
+
+// Count returns the total number of sessions currently retained in memory.
+func (r *SessionRegistry) Count() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.byID)
+}
+
+func (r *SessionRegistry) pruneExpiredLocked(cutoff time.Time) int {
+	removed := 0
+	for id, p := range r.byID {
+		if p.ConnectionState == StateDisconnected && p.CurrentRoomID == "" && p.DisconnectedAt != nil && p.DisconnectedAt.Before(cutoff) {
+			delete(r.byID, id)
+			delete(r.byToken, p.SessionToken)
+			removed++
+		}
+	}
+	return removed
+}
+
+// pruneIdleLocked keeps memory bounded by removing expired idle sessions first,
+// then evicting the oldest disconnected roomless sessions if maxSessions is reached.
+// Caller must hold r.mu.
+func (r *SessionRegistry) pruneIdleLocked(now time.Time) {
+	if r.idleSessionTTL > 0 {
+		r.pruneExpiredLocked(now.Add(-r.idleSessionTTL))
+	}
+
+	if r.maxSessions <= 0 || len(r.byID) < r.maxSessions {
+		return
+	}
+
+	var evictable []*Player
+	for _, p := range r.byID {
+		if p.ConnectionState == StateDisconnected && p.CurrentRoomID == "" {
+			evictable = append(evictable, p)
+		}
+	}
+
+	sort.Slice(evictable, func(i, j int) bool {
+		ti := time.Time{}
+		if evictable[i].DisconnectedAt != nil {
+			ti = *evictable[i].DisconnectedAt
+		}
+		tj := time.Time{}
+		if evictable[j].DisconnectedAt != nil {
+			tj = *evictable[j].DisconnectedAt
+		}
+		return ti.Before(tj)
+	})
+
+	for _, p := range evictable {
+		if len(r.byID) < r.maxSessions {
+			break
+		}
+		delete(r.byID, p.ID)
+		delete(r.byToken, p.SessionToken)
+	}
 }
 
 // GetByToken retrieves a player copy by their session token.

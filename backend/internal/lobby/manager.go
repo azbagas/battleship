@@ -795,7 +795,7 @@ func (m *LobbyManager) expirePlacementTimer(roomID string) {
 
 	rng := m.rng
 	if rng == nil {
-		rng = mrand.New(mrand.NewSource(m.clock.Now().UnixNano()))
+		rng = game.NewCryptoSeededRNG()
 	}
 
 	hostID := room.HostPlayerID
@@ -890,7 +890,7 @@ func (m *LobbyManager) initBattleLocked(room *Room) (string, time.Time, RoomStat
 
 	rng := m.rng
 	if rng == nil {
-		rng = mrand.New(mrand.NewSource(m.clock.Now().UnixNano()))
+		rng = game.NewCryptoSeededRNG()
 	}
 
 	firstPlayerID := game.ChooseFirstPlayer(room.HostPlayerID, room.GuestPlayerID, rng)
@@ -1208,7 +1208,7 @@ func (m *LobbyManager) expireTurnTimer(roomID string) {
 
 	rng := m.rng
 	if rng == nil {
-		rng = mrand.New(mrand.NewSource(m.clock.Now().UnixNano()))
+		rng = game.NewCryptoSeededRNG()
 	}
 
 	cell, err := game.RandomUntargetedCell(targetBoard, rng)

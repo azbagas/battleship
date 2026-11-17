@@ -29,7 +29,10 @@ This document specifies the wire format, message catalog, state machine, and ope
 | **Max Payload Size** | 4,096 bytes (4 KB) | `MAX_PAYLOAD_BYTES` | Connection closed with `StatusMessageTooBig` (1009). |
 | **Origin Verification** | `localhost:*,127.0.0.1:*` | `ALLOWED_ORIGINS` | Handshake rejected with HTTP `403 Forbidden`. Set `*` to allow any origin in dev. |
 | **Per-IP Connection Cap** | 10 concurrent conns | `MAX_CONNS_PER_IP` | Upgrade request rejected with HTTP `429 Too Many Requests`. |
+| **Per-IP Handshake Rate Limit** | 5.0 upgrades/s (burst: 20) | — | Rapid upgrade attempts rejected with HTTP `429 Too Many Requests`. |
+| **Proxy IP Header Trust** | `false` (`RemoteAddr` only) | `TRUST_PROXY` | Ignores `X-Real-IP` / `X-Forwarded-For` unless explicitly enabled. |
 | **Message Rate Limit** | 10.0 msg/s (burst: 20) | `RATE_LIMIT_MESSAGES_PER_SEC`, `RATE_LIMIT_BURST` | Rejects excess frames with `{ "type": "error", "payload": { "code": "RATE_LIMIT_EXCEEDED" } }`. |
+| **Outbound Write Timeout** | 5s / 64-frame queue | — | Slow/unresponsive consumers are disconnected with `StatusGoingAway` (1001). |
 | **Handshake Deadline** | 5 seconds | — | Connection closed with `StatusPolicyViolation` (1008) if valid `hello` frame is not received. |
 | **Heartbeat Ping/Pong** | 15s interval, 5s timeout | — | Dead socket detected and closed; triggers 60s disconnect grace period if player is in an active match. |
 | **Graceful Shutdown** | 5-second drain | — | Halts upgrades (HTTP 503), cleanly closes active connections with `StatusGoingAway` (1001). |

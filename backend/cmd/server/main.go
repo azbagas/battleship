@@ -144,14 +144,18 @@ func main() {
 	}
 	wsOpts = append(wsOpts, ws.WithRateLimit(rateLimit, rateBurst))
 
+	if trustProxyStr := strings.TrimSpace(os.Getenv("TRUST_PROXY")); strings.EqualFold(trustProxyStr, "true") || trustProxyStr == "1" {
+		wsOpts = append(wsOpts, ws.WithTrustProxy(true))
+	}
+
 	wsHandler := ws.NewHandler(sessionRegistry, lobbyManager, wsOpts...)
 
 	srv := &http.Server{
-		Addr:         addr,
-		Handler:      routes(sessionRegistry, lobbyManager, wsHandler),
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              addr,
+		Handler:           routes(sessionRegistry, lobbyManager, wsHandler),
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

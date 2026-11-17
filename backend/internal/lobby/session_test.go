@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestSessionRegistry_CreateAndGet(t *testing.T) {
@@ -167,5 +168,79 @@ func TestSessionRegistry_Concurrency(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestSessionRegistry_PruneExpiredDisconnected(t *testing.T) {
+	reg := NewSessionRegistry(WithIdleSessionTTL(0), WithMaxSessions(0))
+
+	pIdleExpired, _ := reg.CreatePlayer("IdleExpired")
+	pInRoom, _ := reg.CreatePlayer("InRoom")
+	pConnected, _ := reg.CreatePlayer("StillOnline")
+
+	_ = reg.SetCurrentRoom(pInRoom.ID, "r_active")
+	reg.DetachConnection(pIdleExpired.SessionToken)
+	reg.DetachConnection(pInRoom.SessionToken)
+
+	// Force DisconnectedAt into the past for deterministic test
+	past := time.Now().UTC().Add(-10 * time.Minute)
+	reg.mu.Lock()
+	reg.byID[pIdleExpired.ID].DisconnectedAt = &past
+	reg.byID[pInRoom.ID].DisconnectedAt = &past
+	reg.mu.Unlock()
+
+	removed := reg.PruneExpiredDisconnected(time.Now().UTC().Add(-5 * time.Minute))
+	if removed != 1 {
+		t.Fatalf("expected 1 expired idle session pruned, got %d", removed)
+	}
+
+	if _, ok := reg.GetByToken(pIdleExpired.SessionToken); ok {
+		t.Errorf("expected expired roomless session to be evicted")
+	}
+	if _, ok := reg.GetByToken(pInRoom.SessionToken); !ok {
+		t.Errorf("expected disconnected session inside active room to be preserved")
+	}
+	if _, ok := reg.GetByToken(pConnected.SessionToken); !ok {
+		t.Errorf("expected connected session to be preserved")
+	}
+}
+
+func TestSessionRegistry_MaxSessionsEviction(t *testing.T) {
+	reg := NewSessionRegistry(WithIdleSessionTTL(0), WithMaxSessions(3))
+
+	p1, _ := reg.CreatePlayer("OldestIdle")
+	p2, _ := reg.CreatePlayer("NewerIdle")
+	p3, _ := reg.CreatePlayer("ActivePlayer")
+
+	reg.DetachConnection(p1.SessionToken)
+	reg.DetachConnection(p2.SessionToken)
+
+	t1 := time.Now().UTC().Add(-2 * time.Minute)
+	t2 := time.Now().UTC().Add(-1 * time.Minute)
+	reg.mu.Lock()
+	reg.byID[p1.ID].DisconnectedAt = &t1
+	reg.byID[p2.ID].DisconnectedAt = &t2
+	reg.mu.Unlock()
+
+	// Creating 4th session should evict p1 (oldest disconnected idle session)
+	p4, err := reg.CreatePlayer("NewestPlayer")
+	if err != nil {
+		t.Fatalf("unexpected error creating 4th player: %v", err)
+	}
+
+	if reg.Count() != 3 {
+		t.Fatalf("expected session count bounded at 3, got %d", reg.Count())
+	}
+	if _, ok := reg.GetByID(p1.ID); ok {
+		t.Errorf("expected oldest idle session p1 to be evicted")
+	}
+	if _, ok := reg.GetByID(p2.ID); !ok {
+		t.Errorf("expected newer idle session p2 to remain")
+	}
+	if _, ok := reg.GetByID(p3.ID); !ok {
+		t.Errorf("expected connected session p3 to remain")
+	}
+	if _, ok := reg.GetByID(p4.ID); !ok {
+		t.Errorf("expected newly created session p4 to exist")
+	}
 }
 

@@ -109,7 +109,7 @@ func TestHandshake_NewSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 	conn, helloOK, snap := connectAndHandshake(t, ctx, server.URL, "  Captain Kirk  ", "")
 	defer func() {
 		_ = conn.Close(websocket.StatusNormalClosure, "done")
@@ -133,7 +133,7 @@ func TestHandshake_ReconnectRestoresSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 
 	// 1. Initial connection
 	conn1, ok1, _ := connectAndHandshake(t, ctx, server.URL, "Spock", "")
@@ -218,7 +218,7 @@ func TestHandshake_UnknownTokenCreatesNewSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 	unknownToken := "invalid-or-restarted-server-token"
 	conn, helloOK, _ := connectAndHandshake(t, ctx, server.URL, "Scotty", unknownToken)
 	defer func() {
@@ -248,7 +248,7 @@ func TestHandshake_InvalidNameRejected(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			server, _, _ := setupTestServer(t)
+			server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 			conn := dialWS(t, ctx, server.URL)
 			defer func() {
 				_ = conn.Close(websocket.StatusNormalClosure, "done")
@@ -281,7 +281,7 @@ func TestHandshake_InvalidFirstMessage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 	conn := dialWS(t, ctx, server.URL)
 	defer func() {
 		_ = conn.Close(websocket.StatusNormalClosure, "done")
@@ -310,7 +310,7 @@ func TestHandshake_MalformedJSON(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 	conn := dialWS(t, ctx, server.URL)
 	defer func() {
 		_ = conn.Close(websocket.StatusNormalClosure, "done")
@@ -334,7 +334,7 @@ func TestWebSocket_LobbyLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 
 	// Client 1 connects (Alice)
 	conn1, _, snap1 := connectAndHandshake(t, ctx, server.URL, "Alice", "")
@@ -409,7 +409,7 @@ func TestWebSocket_HostCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 
 	connHost, _, _ := connectAndHandshake(t, ctx, server.URL, "Host", "")
 	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
@@ -458,7 +458,7 @@ func TestWebSocket_SimultaneousJoinRace(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 
 	// Host creates room
 	connHost, _, _ := connectAndHandshake(t, ctx, server.URL, "Host", "")
@@ -593,7 +593,7 @@ func TestWebSocket_ReadyUpFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 
 	connHost, _, _ := connectAndHandshake(t, ctx, server.URL, "Host", "")
 	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
@@ -703,7 +703,7 @@ func TestWebSocket_ReadyUp_GuestLeave(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 
 	connHost, _, _ := connectAndHandshake(t, ctx, server.URL, "Host", "")
 	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
@@ -764,7 +764,7 @@ func TestWebSocket_ReadyUp_HostLeave(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 
 	connHost, _, _ := connectAndHandshake(t, ctx, server.URL, "Host", "")
 	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
@@ -812,7 +812,7 @@ func TestWebSocket_PlacementSubmitAndMutualConfirmation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 
 	connHost, _, _ := connectAndHandshake(t, ctx, server.URL, "HostAdmiral", "")
 	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
@@ -1000,7 +1000,7 @@ func TestWebSocket_BattleFireAndTurnLoop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 
 	connHost, playerHost, _ := connectAndHandshake(t, ctx, server.URL, "HostShooter", "")
 	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
@@ -1760,7 +1760,7 @@ func TestWebSocket_TwoClientFullGameAndPersistence(t *testing.T) {
 		_ = st.Close()
 	})
 
-	server, _, mgr := setupTestServer(t, lobby.WithStore(st))
+	server, _, mgr, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)}, lobby.WithStore(st))
 
 	connHost, playerHost, connGuest, playerGuest, roomID, currentTurnID := advanceTwoClientsToBattle(
 		t, ctx, server.URL, "AdmiralNimitz", "CaptainHalsey",
@@ -1910,7 +1910,7 @@ func TestWebSocket_TwoClientBattleReconnectAndResume(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 
 	connHost, playerHost, connGuest, playerGuest, roomID, currentTurnID := advanceTwoClientsToBattle(
 		t, ctx, server.URL, "HostReconnect", "GuestReconnect",
@@ -2008,7 +2008,7 @@ func TestWebSocket_TwoClientFullGameAndRematch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	server, _, _ := setupTestServer(t)
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
 
 	connHost, playerHost, connGuest, playerGuest, _, currentTurnID := advanceTwoClientsToBattle(
 		t, ctx, server.URL, "HostRematchFull", "GuestRematchFull",
@@ -2172,5 +2172,119 @@ func TestWebSocket_DraftPlacementPreservedOnTimeout(t *testing.T) {
 	}
 	if !sawCarrier || !sawDestroyer {
 		t.Errorf("expected draft ships to be preserved on 60s placement timeout, got fleet: %+v", confPayload.Ships)
+	}
+}
+
+func TestHandshake_ReconnectInActiveRoomPreservesDisplayName(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
+
+	connHost, playerHost, _ := connectAndHandshake(t, ctx, server.URL, "OriginalHost", "")
+	defer func() { _ = connHost.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Create room so host has an active CurrentRoomID
+	mustWriteJSON(t, ctx, connHost, OutboundMessage{Type: TypeLobbyCreate, Payload: map[string]any{}})
+	_, _ = drainUntilType(t, ctx, connHost, TypeRoomState)
+
+	// Simulate drop and reconnect with a different display name (e.g. spoofing attempt)
+	_ = connHost.Close(websocket.StatusNormalClosure, "drop")
+	time.Sleep(50 * time.Millisecond)
+
+	connReconnected, helloOK, _ := connectAndHandshake(t, ctx, server.URL, "SpoofedName", playerHost.SessionToken)
+	defer func() { _ = connReconnected.Close(websocket.StatusNormalClosure, "done") }()
+
+	if helloOK.DisplayName != "OriginalHost" {
+		t.Errorf("expected display name to remain 'OriginalHost' when reconnecting to active room, got %q", helloOK.DisplayName)
+	}
+}
+
+func TestWebSocket_SpoofedForwardedHeaderCannotBypassIPLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{
+		WithIPLimit(1),
+		WithTrustProxy(false),
+	})
+
+	conn1, _, _ := connectAndHandshake(t, ctx, server.URL, "LegitUser", "")
+	defer func() { _ = conn1.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Attempt second connection from same RemoteAddr with spoofed X-Forwarded-For
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	_, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"X-Forwarded-For": []string{"198.51.100.99"},
+			"X-Real-IP":       []string{"198.51.100.99"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected second connection from same IP to be rejected despite spoofed forwarded headers")
+	}
+	if resp != nil && resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("expected HTTP 429 Too Many Requests, got %d", resp.StatusCode)
+	}
+}
+
+func TestWebSocket_HandshakeRateLimited(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{
+		WithIPLimit(0),
+		WithHandshakeRateLimit(0.5, 1.0),
+	})
+
+	conn1, _, _ := connectAndHandshake(t, ctx, server.URL, "Fast1", "")
+	_ = conn1.Close(websocket.StatusNormalClosure, "done")
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	_, resp, err := websocket.Dial(ctx, wsURL, nil)
+	if err == nil {
+		t.Fatal("expected rapid second upgrade to be rate limited")
+	}
+	if resp != nil && resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("expected HTTP 429 Too Many Requests, got %d", resp.StatusCode)
+	}
+}
+
+func TestWSSender_SlowConsumerOutboxOverflowClosesWithoutBlocking(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	server, _, _, _ := setupTestServerWithHandlerOpts(t, []HandlerOption{WithRateLimit(100, 100)})
+	conn := dialWS(t, ctx, server.URL)
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Unit-test wsSender directly against an unread connection: fill outbox > defaultOutboxSize
+	// without starting read loop on the peer, verifying Send returns promptly.
+	sender := &wsSender{
+		conn:   conn,
+		ctx:    ctx,
+		async:  true,
+		outbox: make(chan outboundFrame, 2),
+	}
+
+	if err := sender.Send("test.1", map[string]any{"n": 1}); err != nil {
+		t.Fatalf("unexpected error on slot 1: %v", err)
+	}
+	if err := sender.Send("test.2", map[string]any{"n": 2}); err != nil {
+		t.Fatalf("unexpected error on slot 2: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- sender.Send("test.3", map[string]any{"n": 3})
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected slow consumer overflow error when outbox full")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("Send blocked on full outbox instead of dropping slow consumer immediately")
 	}
 }

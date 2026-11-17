@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"time"
 )
 
 var (
@@ -201,10 +200,10 @@ func ValidateFleet(ships []PlacedShip) error {
 }
 
 // GenerateRandomFleet generates a complete, valid 5-ship fleet on a 10×10 grid.
-// If rng is nil, a new local random generator seeded with current time is used.
+// If rng is nil, a cryptographically backed RNG is used.
 func GenerateRandomFleet(rng *rand.Rand) []PlacedShip {
 	if rng == nil {
-		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+		rng = NewCryptoSeededRNG()
 	}
 	fleet, err := AutoPlaceRemaining(nil, rng)
 	if err != nil {
@@ -254,7 +253,7 @@ func ValidatePartialFleet(ships []PlacedShip) error {
 // If existing already contains a valid 5-ship fleet, it is validated and returned untouched.
 func AutoPlaceRemaining(existing []PlacedShip, rng *rand.Rand) ([]PlacedShip, error) {
 	if rng == nil {
-		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+		rng = NewCryptoSeededRNG()
 	}
 
 	if err := ValidatePartialFleet(existing); err != nil {

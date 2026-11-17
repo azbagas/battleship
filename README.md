@@ -57,6 +57,7 @@ The backend runs zero-config with sensible defaults out of the box. Key environm
 - `ALLOWED_ORIGINS`: Comma-separated list of allowed WebSocket origins (default: `*` in development).
 - `MAX_PAYLOAD_BYTES`: Maximum incoming message payload size (default: `32768` = 32 KB).
 - `MAX_CONNS_PER_IP`: Max concurrent WebSocket connections per IP address (default: `10`).
+- `TRUST_PROXY`: Whether to trust `X-Real-IP` / `X-Forwarded-For` headers from a reverse proxy (default: `false`; set `true` behind Nginx/Caddy).
 - `RATE_LIMIT_MESSAGES_PER_SEC` / `RATE_LIMIT_BURST`: Per-connection token bucket rate limiter (defaults: `10.0` msg/s, `20.0` burst).
 
 ### Test
