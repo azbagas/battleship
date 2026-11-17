@@ -1,7 +1,8 @@
 import React from 'react'
-import { useLobby } from '../context/LobbyContext'
-import { useSession } from '../context/SessionContext'
-import { ConnectionBadge } from './ConnectionBadge'
+import { useLobby } from '../../context/LobbyContext'
+import { useSession } from '../../context/SessionContext'
+import { ConnectionBadge } from '../../components/ConnectionBadge'
+import { getRoomParticipants } from '../../utils/roomParticipants'
 
 export const GameOverScreen: React.FC = () => {
   const {
@@ -18,11 +19,7 @@ export const GameOverScreen: React.FC = () => {
   } = useLobby()
   const { player, connectionStatus, isSessionConflict } = useSession()
 
-  const hostName = activeRoom?.host?.name || 'Host Commander'
-  const guestName = activeRoom?.guest?.name || activeRoom?.opponentName || 'Guest Commander'
-  const role = activeRoom?.role || 'host'
-  const playerName = role === 'host' ? hostName : guestName
-  const opponentName = role === 'host' ? guestName : hostName
+  const { playerName, opponentName } = getRoomParticipants(activeRoom)
   const sectorId = activeRoom?.roomId ? activeRoom.roomId.slice(-6).toUpperCase() : 'SECTOR-1'
 
   const winnerPlayerId = gameOverResult?.winnerPlayerId ?? activeRoom?.winnerPlayerId

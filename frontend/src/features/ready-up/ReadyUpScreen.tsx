@@ -1,8 +1,10 @@
 import React from 'react'
-import { useLobby } from '../context/LobbyContext'
-import { useSession } from '../context/SessionContext'
-import { ConnectionBadge } from './ConnectionBadge'
-import { OpponentDisconnectBanner } from './OpponentDisconnectBanner'
+import { useLobby } from '../../context/LobbyContext'
+import { useSession } from '../../context/SessionContext'
+import { ConnectionBadge } from '../../components/ConnectionBadge'
+import { OpponentDisconnectBanner } from '../../components/OpponentDisconnectBanner'
+import { ReconnectingBanner } from '../../components/ReconnectingBanner'
+import { getRoomParticipants } from '../../utils/roomParticipants'
 
 export const ReadyUpScreen: React.FC = () => {
   const {
@@ -16,15 +18,12 @@ export const ReadyUpScreen: React.FC = () => {
   } = useLobby()
   const { connectionStatus, isSessionConflict } = useSession()
 
-  const hostName = activeRoom?.host?.name || 'Host Commander'
-  const guestName = activeRoom?.guest?.name || activeRoom?.opponentName || 'Guest Commander'
-  const role = activeRoom?.role || 'host'
+  const { role, hostName, guestName, opponentName } = getRoomParticipants(activeRoom)
 
   const isHostReady = !!readyState?.hostReady
   const isGuestReady = !!readyState?.guestReady
   const isSelfReady = role === 'host' ? isHostReady : isGuestReady
   const isOpponentReady = role === 'host' ? isGuestReady : isHostReady
-  const opponentName = role === 'host' ? guestName : hostName
 
   // Contextual guidance text
   let guidanceText = 'Both commanders must confirm fleet readiness before deployment commences.'
@@ -48,15 +47,11 @@ export const ReadyUpScreen: React.FC = () => {
   return (
     <div className="w-full max-w-lg mx-auto">
       {/* Self Reconnecting Notice Banner */}
-      {(connectionStatus === 'connecting' || connectionStatus === 'disconnected') && (
-        <div
-          role="status"
-          className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono flex items-center gap-2"
-        >
-          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-          <span>Connection lost. Attempting to restore link...</span>
-        </div>
-      )}
+      <ReconnectingBanner
+        status={connectionStatus}
+        className="mb-4"
+        message="Connection lost. Attempting to restore link..."
+      />
 
       {/* Opponent Disconnect Grace Countdown Banner */}
       {opponentDisconnectDeadline && (

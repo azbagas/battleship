@@ -4,7 +4,6 @@ import {
   BattleStartPayload,
   BattleTurnPayload,
   Coord,
-  ErrorCode,
   ErrorPayload,
   GameOverPayload,
   HelloOKPayload,
@@ -25,6 +24,8 @@ import {
 import { wsClient, WebSocketClient } from '../services/wsClient'
 import { useSession } from './SessionContext'
 import { LobbyContext, ReadyState } from './LobbyContext'
+import { lobbyErrorMessage } from './lobbyErrorMessages'
+import { shotLogToEvents, shotsToMap } from './roomStateMappers'
 
 export interface LobbyProviderProps {
   children: React.ReactNode
@@ -107,6 +108,67 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
     setGameOverResult(null)
   }, [])
 
+  const resetPlacementState = useCallback(() => {
+    setIsFleetConfirmed(false)
+    setIsOpponentConfirmed(false)
+    setOwnFleet([])
+    setPlacementDeadline(null)
+  }, [])
+
+  const hydrateFromRoomState = useCallback((state: Partial<RoomStatePayload>) => {
+    if (state.opponentDisconnected && state.opponentGraceDeadline) {
+      setOpponentDisconnectDeadline(state.opponentGraceDeadline)
+    } else {
+      setOpponentDisconnectDeadline(null)
+    }
+    if (typeof state.hostReady === 'boolean' && typeof state.guestReady === 'boolean') {
+      setReadyState({ hostReady: state.hostReady, guestReady: state.guestReady })
+    }
+    if (state.placementDeadline) {
+      setPlacementDeadline(state.placementDeadline)
+    }
+    if (typeof state.fleetConfirmed === 'boolean') {
+      setIsFleetConfirmed(state.fleetConfirmed)
+    }
+    if (typeof state.opponentConfirmed === 'boolean') {
+      setIsOpponentConfirmed(state.opponentConfirmed)
+    }
+    if (Array.isArray(state.ownFleet)) {
+      setOwnFleet(state.ownFleet)
+    }
+    if (state.turnPlayerId) {
+      setTurnPlayerId(state.turnPlayerId)
+    }
+    if (state.turnDeadline) {
+      setTurnDeadline(state.turnDeadline)
+    }
+    if (state.winnerPlayerId) {
+      const shotCount = Array.isArray(state.shotLog) ? state.shotLog.length : 0
+      setGameOverResult((prev) => ({
+        winnerPlayerId: state.winnerPlayerId!,
+        reason: state.endReason || 'all_sunk',
+        totalShots: shotCount > 0 ? shotCount : (prev?.totalShots ?? 0),
+      }))
+    }
+    if (Array.isArray(state.shotLog) && state.shotLog.length > 0) {
+      setRecentEvents(shotLogToEvents(state.shotLog))
+    }
+    if (state.battleView) {
+      if (Array.isArray(state.battleView.targetBoard?.shots)) {
+        setTargetShots(shotsToMap(state.battleView.targetBoard.shots))
+      }
+      if (Array.isArray(state.battleView.ownBoard?.shots)) {
+        setOwnShots(shotsToMap(state.battleView.ownBoard.shots))
+      }
+      if (Array.isArray(state.battleView.targetBoard?.sunkShips)) {
+        setOpponentSunkShips(state.battleView.targetBoard.sunkShips)
+      }
+      if (Array.isArray(state.battleView.ownBoard?.sunkShips)) {
+        setOwnSunkShips(state.battleView.ownBoard.sunkShips)
+      }
+    }
+  }, [])
+
   // Reset lobby state if session logs out or resets
   useEffect(() => {
     if (!session.player) {
@@ -120,14 +182,11 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       setReadyState(null)
       setIsTogglingReady(false)
       setIsLeavingRoom(false)
-      setIsFleetConfirmed(false)
-      setIsOpponentConfirmed(false)
-      setOwnFleet([])
-      setPlacementDeadline(null)
+      resetPlacementState()
       resetBattleState()
       resetRematchState()
     }
-  }, [session.player, resetBattleState, resetRematchState])
+  }, [session.player, resetPlacementState, resetBattleState, resetRematchState])
 
   // Wire WebSocket message listeners
   useEffect(() => {
@@ -136,75 +195,7 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
         const state = payload.restoredState as Partial<RoomStatePayload>
         if (state.roomId && state.phase) {
           setActiveRoom(payload.restoredState as RoomStatePayload)
-          if (state.opponentDisconnected && state.opponentGraceDeadline) {
-            setOpponentDisconnectDeadline(state.opponentGraceDeadline)
-          } else {
-            setOpponentDisconnectDeadline(null)
-          }
-          if (typeof state.hostReady === 'boolean' && typeof state.guestReady === 'boolean') {
-            setReadyState({ hostReady: state.hostReady, guestReady: state.guestReady })
-          }
-          if (state.placementDeadline) {
-            setPlacementDeadline(state.placementDeadline)
-          }
-          if (typeof state.fleetConfirmed === 'boolean') {
-            setIsFleetConfirmed(state.fleetConfirmed)
-          }
-          if (typeof state.opponentConfirmed === 'boolean') {
-            setIsOpponentConfirmed(state.opponentConfirmed)
-          }
-          if (Array.isArray(state.ownFleet)) {
-            setOwnFleet(state.ownFleet)
-          }
-          if (state.turnPlayerId) {
-            setTurnPlayerId(state.turnPlayerId)
-          }
-          if (state.turnDeadline) {
-            setTurnDeadline(state.turnDeadline)
-          }
-          if (state.winnerPlayerId) {
-            const shotCount = Array.isArray(state.shotLog) ? state.shotLog.length : 0
-            setGameOverResult((prev) => ({
-              winnerPlayerId: state.winnerPlayerId!,
-              reason: state.endReason || 'all_sunk',
-              totalShots: shotCount > 0 ? shotCount : (prev?.totalShots ?? 0),
-            }))
-          }
-          if (Array.isArray(state.shotLog) && state.shotLog.length > 0) {
-            const mappedEvents: BattleShotResultPayload[] = state.shotLog
-              .slice(-20)
-              .reverse()
-              .map((rec) => ({
-                by: rec.shooterId,
-                cell: rec.cell,
-                result: rec.result,
-                sunkShip: rec.sunkShip,
-                auto: rec.auto,
-              }))
-            setRecentEvents(mappedEvents)
-          }
-          if (state.battleView) {
-            if (Array.isArray(state.battleView.targetBoard?.shots)) {
-              const tMap = new Map<string, ShotResult>()
-              state.battleView.targetBoard.shots.forEach((s) => {
-                tMap.set(`${s.cell.x},${s.cell.y}`, s.result)
-              })
-              setTargetShots(tMap)
-            }
-            if (Array.isArray(state.battleView.ownBoard?.shots)) {
-              const oMap = new Map<string, ShotResult>()
-              state.battleView.ownBoard.shots.forEach((s) => {
-                oMap.set(`${s.cell.x},${s.cell.y}`, s.result)
-              })
-              setOwnShots(oMap)
-            }
-            if (Array.isArray(state.battleView.targetBoard?.sunkShips)) {
-              setOpponentSunkShips(state.battleView.targetBoard.sunkShips)
-            }
-            if (Array.isArray(state.battleView.ownBoard?.sunkShips)) {
-              setOwnSunkShips(state.battleView.ownBoard.sunkShips)
-            }
-          }
+          hydrateFromRoomState(state)
         }
       } else {
         // If the player previously had an active room and restoredState is null/empty,
@@ -216,10 +207,7 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
           return null
         })
         setReadyState(null)
-        setIsFleetConfirmed(false)
-        setIsOpponentConfirmed(false)
-        setOwnFleet([])
-        setPlacementDeadline(null)
+        resetPlacementState()
         setOpponentDisconnectDeadline(null)
         resetBattleState()
       }
@@ -240,10 +228,7 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       setIsCancelling(false)
       setIsLeavingRoom(false)
       setIsTogglingReady(false)
-      setIsFleetConfirmed(false)
-      setIsOpponentConfirmed(false)
-      setOwnFleet([])
-      setPlacementDeadline(null)
+      resetPlacementState()
       setOpponentDisconnectDeadline(null)
       resetBattleState()
       resetRematchState()
@@ -281,75 +266,7 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
         resetBattleState()
         resetRematchState()
       }
-      if (payload.opponentDisconnected && payload.opponentGraceDeadline) {
-        setOpponentDisconnectDeadline(payload.opponentGraceDeadline)
-      } else {
-        setOpponentDisconnectDeadline(null)
-      }
-      if (typeof payload.hostReady === 'boolean' && typeof payload.guestReady === 'boolean') {
-        setReadyState({ hostReady: payload.hostReady, guestReady: payload.guestReady })
-      }
-      if (payload.placementDeadline) {
-        setPlacementDeadline(payload.placementDeadline)
-      }
-      if (typeof payload.fleetConfirmed === 'boolean') {
-        setIsFleetConfirmed(payload.fleetConfirmed)
-      }
-      if (typeof payload.opponentConfirmed === 'boolean') {
-        setIsOpponentConfirmed(payload.opponentConfirmed)
-      }
-      if (Array.isArray(payload.ownFleet)) {
-        setOwnFleet(payload.ownFleet)
-      }
-      if (payload.turnPlayerId) {
-        setTurnPlayerId(payload.turnPlayerId)
-      }
-      if (payload.turnDeadline) {
-        setTurnDeadline(payload.turnDeadline)
-      }
-      if (payload.winnerPlayerId) {
-        const shotCount = Array.isArray(payload.shotLog) ? payload.shotLog.length : 0
-        setGameOverResult((prev) => ({
-          winnerPlayerId: payload.winnerPlayerId!,
-          reason: payload.endReason || 'all_sunk',
-          totalShots: shotCount > 0 ? shotCount : (prev?.totalShots ?? 0),
-        }))
-      }
-      if (Array.isArray(payload.shotLog) && payload.shotLog.length > 0) {
-        const mappedEvents: BattleShotResultPayload[] = payload.shotLog
-          .slice(-20)
-          .reverse()
-          .map((rec) => ({
-            by: rec.shooterId,
-            cell: rec.cell,
-            result: rec.result,
-            sunkShip: rec.sunkShip,
-            auto: rec.auto,
-          }))
-        setRecentEvents(mappedEvents)
-      }
-      if (payload.battleView) {
-        if (Array.isArray(payload.battleView.targetBoard?.shots)) {
-          const tMap = new Map<string, ShotResult>()
-          payload.battleView.targetBoard.shots.forEach((s) => {
-            tMap.set(`${s.cell.x},${s.cell.y}`, s.result)
-          })
-          setTargetShots(tMap)
-        }
-        if (Array.isArray(payload.battleView.ownBoard?.shots)) {
-          const oMap = new Map<string, ShotResult>()
-          payload.battleView.ownBoard.shots.forEach((s) => {
-            oMap.set(`${s.cell.x},${s.cell.y}`, s.result)
-          })
-          setOwnShots(oMap)
-        }
-        if (Array.isArray(payload.battleView.targetBoard?.sunkShips)) {
-          setOpponentSunkShips(payload.battleView.targetBoard.sunkShips)
-        }
-        if (Array.isArray(payload.battleView.ownBoard?.sunkShips)) {
-          setOwnSunkShips(payload.battleView.ownBoard.sunkShips)
-        }
-      }
+      hydrateFromRoomState(payload)
       setIsCreating(false)
       setJoiningRoomId(null)
       setIsLeavingRoom(false)
@@ -480,53 +397,7 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       setIsCancelling(false)
       setIsTogglingReady(false)
       setIsLeavingRoom(false)
-
-      switch (err.code) {
-        case ErrorCode.RoomNotAvailable:
-          setLobbyError('Game is no longer available. Another commander joined or the room was cancelled.')
-          break
-        case ErrorCode.RoomCapReached:
-          setLobbyError('Maximum room capacity reached (10 rooms). Please wait for an open slot or join a waiting game.')
-          break
-        case ErrorCode.RoomNotFound:
-          setLobbyError('Room not found or no longer available.')
-          break
-        case ErrorCode.CannotJoinOwnRoom:
-          setLobbyError('You cannot join your own room.')
-          break
-        case ErrorCode.AlreadyInRoom:
-          setLobbyError('You already have an active room or match.')
-          break
-        case ErrorCode.NotInWaitingRoom:
-          setLobbyError('You are not currently hosting a waiting room.')
-          break
-        case ErrorCode.NotInReadyUp:
-          setLobbyError('Room is no longer in ready-up phase.')
-          break
-        case ErrorCode.NotInPlacement:
-          setLobbyError('Fleet placement has concluded.')
-          break
-        case ErrorCode.FleetAlreadyLocked:
-          setLobbyError('Fleet is already confirmed and locked.')
-          break
-        case ErrorCode.InvalidPlacement:
-          setLobbyError('Invalid ship positions. Check for overlaps or out-of-grid bounds.')
-          break
-        case ErrorCode.NotYourTurn:
-          setLobbyError('Stand by, Commander. It is not your turn to fire.')
-          break
-        case ErrorCode.CellAlreadyTargeted:
-          setLobbyError('Coordinate has already been targeted. Select an uncharted grid cell.')
-          break
-        case ErrorCode.GameOver:
-          setLobbyError('The engagement has already concluded.')
-          break
-        case ErrorCode.RematchNotAllowed:
-          setLobbyError('Rematch is only available following a normal completed game.')
-          break
-        default:
-          setLobbyError(err.message || 'An unexpected error occurred.')
-      }
+      setLobbyError(lobbyErrorMessage(err))
     })
 
     return () => {
@@ -547,7 +418,7 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       unsubRematchCancelled()
       unsubError()
     }
-  }, [client, session.player, resetBattleState, resetRematchState])
+  }, [client, session.player, hydrateFromRoomState, resetPlacementState, resetBattleState, resetRematchState])
 
   const isRoomCapReached = totalRooms >= maxRooms
 

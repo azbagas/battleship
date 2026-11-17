@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { GameOverScreen } from './GameOverScreen'
-import { LobbyContext, LobbyContextValue } from '../context/LobbyContext'
-import { SessionContext, SessionContextValue } from '../context/SessionContext'
-import { WebSocketClient } from '../services/wsClient'
-import { RoomStatePayload } from '../types/protocol'
+import { LobbyContext, LobbyContextValue } from '../../context/LobbyContext'
+import { SessionContext, SessionContextValue } from '../../context/SessionContext'
+import { WebSocketClient } from '../../services/wsClient'
+import { RoomStatePayload } from '../../types/protocol'
 
 describe('GameOverScreen', () => {
   const baseSession: SessionContextValue = {

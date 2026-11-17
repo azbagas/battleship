@@ -19,6 +19,14 @@ Online Battleship is built as a monorepo with a React + TypeScript single-page a
 ```
 battleship/
 ├── frontend/            # React app (Vite + TypeScript)
+│   └── src/
+│       ├── features/    # Screen modules (home, lobby, ready-up, placement, battle, game-over)
+│       ├── components/  # Cross-screen UI primitives (GridFrame, ConfirmDialog, ReconnectingBanner, ShipSvg, etc.)
+│       ├── hooks/       # Shared hooks (useCountdown, useGridKeyboardNav, useElapsedTime)
+│       ├── context/     # SessionProvider & LobbyProvider (+ roomStateMappers, lobbyErrorMessages)
+│       ├── services/    # wsClient and localStorage sessionStore
+│       ├── types/       # WebSocket protocol types and error codes
+│       └── utils/       # Pure placement validation, coordinate notation, sanitization, roomParticipants
 ├── backend/             # Go module
 │   ├── cmd/server/      # main entrypoint, HTTP/WS server, config, graceful shutdown
 │   ├── internal/game/   # pure game logic (board, ships, shots, win check, per-player views)
@@ -31,7 +39,7 @@ battleship/
 ```
 
 ## Components & Responsibilities
-- **`frontend`:** Renders the Home, Lobby, Waiting Room, Ready-Up, Placement, Battle, and Game Over screens. Persists `sessionToken` and `displayName` in `localStorage`, maintains the WebSocket connection with automatic backoff reconnection, and projects server messages into UI state without computing authoritative game outcomes locally.
+- **`frontend`:** Organized by feature module under `frontend/src/features/` (`home`, `lobby`, `ready-up`, `placement`, `battle`, `game-over`), backed by shared cross-screen primitives in `components/`, reusable hooks in `hooks/`, and pure helpers in `utils/`. `SessionProvider` and `LobbyProvider` (`context/`) persist `sessionToken` and `displayName` in `localStorage`, maintain the WebSocket connection with automatic backoff reconnection, and project server messages into UI state without computing authoritative game outcomes locally.
 - **`backend/cmd/server`:** Application entrypoint. Parses environment configuration (port, allowed origin, SQLite path, configurable timers/caps), exposes `/healthz` and the WebSocket upgrade endpoint, wires `store`, `lobby`, and `ws`, and handles `SIGTERM` for graceful shutdown.
 - **`backend/internal/game`:** Pure, deterministic game engine with zero I/O and no timers. Validates ship placements (10×10 bounds, 5-ship fleet, no overlaps, adjacent ships allowed), generates random fleets and partial auto-placements, resolves shots (miss, hit, sunk), selects random untargeted cells for timed-out turns, checks win conditions, and builds per-player board views so unrevealed opponent ships never leak.
 - **`backend/internal/lobby`:** Manages the in-memory session registry (`playerId` ↔ `sessionToken`), public lobby list, atomic room joins, the 10-room global cap, and individual room state machines (`waiting` → `ready-up` → `placement` → `battle` → `finished`). Owns room timers (60s placement, 30s turn, 60s disconnect grace) via an injectable clock interface and serializes state mutations per room using a single owner goroutine or mutex.
@@ -117,6 +125,7 @@ All messages are JSON envelopes of the form `{ "type": string, "payload": object
 - **In-memory live state + SQLite only on game end:** Active rooms and boards live exclusively in Go memory; SQLite is written once when a game finishes using pure-Go `modernc.org/sqlite`. Trade-off: A server restart drops in-flight games, which is explicitly acceptable for v1 in exchange for low latency and zero CGO/external DB dependencies.
 - **Single active connection per session token:** A second WebSocket connection presenting an already-connected `sessionToken` is rejected so the existing tab stays active. Trade-off: Users cannot mirror the same game across two open tabs simultaneously, avoiding split-brain client state.
 - **In-memory token bucket rate limiting and IP connection tracking:** Per-connection message rate limiting (10 msg/s, burst 20) is managed directly on the connection actor via an in-memory token bucket, while client IPs are normalized and capped (10 concurrent conns/IP) via a synchronized IP tracker. Trade-off: Limits are local to the process and reset on restart, matching the single-VPS in-memory architecture without requiring Redis.
+- **Feature-module frontend layout (`src/features/`):** Each game phase owns a folder containing its screen composer, phase-specific hooks, and sub-components, while only cross-screen UI (`GridFrame`, `ConfirmDialog`, `ReconnectingBanner`, `ShipSvg`, `ConnectionBadge`, `BrandLogo`, `OpponentDisconnectBanner`) lives in `src/components/`. `LobbyProvider` keeps its single `useLobby()` context API while isolating pure message mappers (`roomStateMappers.ts`) and error translation (`lobbyErrorMessages.ts`). Trade-off: Preserves zero consumer/mock churn while eliminating multi-hundred-line screen components and duplicated timers, grid chrome, and room-state hydration logic.
 
 ## Constraints & Non-Goals
 - **Fairness & Validation (NFR-1 to NFR-4):** Server is the sole source of truth; every client message is validated for schema, size (max 32 KB via `conn.SetReadLimit`), game phase, and turn ownership. Malformed or out-of-turn messages return an `error` event and never crash the server.

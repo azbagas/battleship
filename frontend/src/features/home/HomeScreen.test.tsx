@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { HomeScreen } from './HomeScreen'
-import { SessionProvider } from '../context/SessionProvider'
-import { WebSocketClient } from '../services/wsClient'
-import { sessionStore } from '../services/storage'
+import { SessionProvider } from '../../context/SessionProvider'
+import { WebSocketClient } from '../../services/wsClient'
+import { sessionStore } from '../../services/storage'
 
 describe('HomeScreen', () => {
   let mockClient: WebSocketClient

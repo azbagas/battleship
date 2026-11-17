@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { useSession } from '../context/SessionContext'
-import { sanitizeDisplayName } from '../utils/sanitize'
-import { ConnectionBadge } from './ConnectionBadge'
-import { BrandLogo } from './BrandLogo'
+import { useSession } from '../../context/SessionContext'
+import { sanitizeDisplayName } from '../../utils/sanitize'
+import { ConnectionBadge } from '../../components/ConnectionBadge'
+import { BrandLogo } from '../../components/BrandLogo'
 
 export const HomeScreen: React.FC = () => {
   const {

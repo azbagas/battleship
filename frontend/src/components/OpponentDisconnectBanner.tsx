@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react'
+import React from 'react'
 import { useLobby } from '../context/LobbyContext'
+import { useCountdown } from '../hooks/useCountdown'
 
 export interface OpponentDisconnectBannerProps {
   deadline?: string | null
@@ -34,23 +35,7 @@ export const OpponentDisconnectBanner: React.FC<OpponentDisconnectBannerProps> =
   const finalDescription = description || defaultDescription
   const finalCountdownLabel = countdownLabel || defaultCountdownLabel
 
-  const [secondsRemaining, setSecondsRemaining] = useState<number>(60)
-
-  useEffect(() => {
-    if (!activeDeadline) return
-
-    const targetTime = new Date(activeDeadline).getTime()
-
-    const updateTimer = () => {
-      const now = Date.now()
-      const diffSec = Math.max(0, Math.ceil((targetTime - now) / 1000))
-      setSecondsRemaining(diffSec)
-    }
-
-    updateTimer()
-    const interval = setInterval(updateTimer, 250)
-    return () => clearInterval(interval)
-  }, [activeDeadline])
+  const secondsRemaining = useCountdown(activeDeadline, 60)
 
   if (!activeDeadline) {
     return null

@@ -1,9 +1,9 @@
 import React from 'react'
-import { useLobby } from '../context/LobbyContext'
-import { useSession } from '../context/SessionContext'
-import { useElapsedTime } from '../hooks/useElapsedTime'
-import { ConnectionBadge } from './ConnectionBadge'
-import { BrandLogo } from './BrandLogo'
+import { useLobby } from '../../context/LobbyContext'
+import { useSession } from '../../context/SessionContext'
+import { useElapsedTime } from '../../hooks/useElapsedTime'
+import { ConnectionBadge } from '../../components/ConnectionBadge'
+import { BrandLogo } from '../../components/BrandLogo'
 
 export const WaitingRoomScreen: React.FC = () => {
   const { activeRoom, cancelRoom, isCancelling } = useLobby()

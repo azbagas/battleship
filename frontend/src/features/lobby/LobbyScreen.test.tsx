@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { LobbyScreen } from './LobbyScreen'
-import { LobbyContext, LobbyContextValue } from '../context/LobbyContext'
-import { SessionContext, SessionContextValue } from '../context/SessionContext'
-import { WebSocketClient } from '../services/wsClient'
-import { WaitingRoomView } from '../types/protocol'
+import { LobbyContext, LobbyContextValue } from '../../context/LobbyContext'
+import { SessionContext, SessionContextValue } from '../../context/SessionContext'
+import { WebSocketClient } from '../../services/wsClient'
+import { WaitingRoomView } from '../../types/protocol'
 
 describe('LobbyScreen', () => {
   const defaultMockLobby: LobbyContextValue = {

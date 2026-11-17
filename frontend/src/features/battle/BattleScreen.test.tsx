@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BattleScreen } from './BattleScreen'
-import { LobbyContext, LobbyContextValue } from '../context/LobbyContext'
-import { SessionContext, SessionContextValue } from '../context/SessionContext'
-import { WebSocketClient } from '../services/wsClient'
-import { PlacedShip, RoomStatePayload, ShotResult, SunkShipInfo } from '../types/protocol'
+import { LobbyContext, LobbyContextValue } from '../../context/LobbyContext'
+import { SessionContext, SessionContextValue } from '../../context/SessionContext'
+import { WebSocketClient } from '../../services/wsClient'
+import { PlacedShip, RoomStatePayload, ShotResult, SunkShipInfo } from '../../types/protocol'
 
 describe('BattleScreen', () => {
   const baseSession: SessionContextValue = {
