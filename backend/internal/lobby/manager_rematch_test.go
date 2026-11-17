@@ -106,7 +106,7 @@ func TestRematch_MutualAcceptanceStartsPlacement(t *testing.T) {
 	if len(hostOffers) != 1 || len(guestOffers) != 1 {
 		t.Fatalf("expected 1 rematch.offered for both, got host=%d guest=%d", len(hostOffers), len(guestOffers))
 	}
-	if hostOffers[0].payload.(map[string]any)["by"] != pHost.ID {
+	if hostOffers[0].payload.(RematchOfferedPayload).By != pHost.ID {
 		t.Errorf("expected offer by host, got %v", hostOffers[0].payload)
 	}
 
@@ -188,7 +188,7 @@ func TestRematch_DeclineCancelsOffer(t *testing.T) {
 	if len(hostCancelled) != 1 || len(guestCancelled) != 1 {
 		t.Fatalf("expected rematch.cancelled on decline, got host=%d guest=%d", len(hostCancelled), len(guestCancelled))
 	}
-	if hostCancelled[0].payload.(map[string]any)["reason"] != "declined" {
+	if hostCancelled[0].payload.(RematchCancelledPayload).Reason != "declined" {
 		t.Errorf("expected reason 'declined', got %v", hostCancelled[0].payload)
 	}
 }
@@ -214,7 +214,7 @@ func TestRematch_LeaveRoomCancelsOffer(t *testing.T) {
 	if len(guestCancelled) != 1 {
 		t.Fatalf("expected 1 rematch.cancelled to guest on host leave, got %d", len(guestCancelled))
 	}
-	if guestCancelled[0].payload.(map[string]any)["reason"] != "left" {
+	if guestCancelled[0].payload.(RematchCancelledPayload).Reason != "left" {
 		t.Errorf("expected reason 'left', got %v", guestCancelled[0].payload)
 	}
 }
@@ -237,7 +237,7 @@ func TestRematch_DisconnectCancelsOffer(t *testing.T) {
 	if len(hostCancelled) != 1 {
 		t.Fatalf("expected 1 rematch.cancelled to host on guest disconnect, got %d", len(hostCancelled))
 	}
-	if hostCancelled[0].payload.(map[string]any)["reason"] != "disconnected" {
+	if hostCancelled[0].payload.(RematchCancelledPayload).Reason != "disconnected" {
 		t.Errorf("expected reason 'disconnected', got %v", hostCancelled[0].payload)
 	}
 }

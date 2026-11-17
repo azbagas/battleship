@@ -108,11 +108,11 @@ func TestBattle_TransitionAndStart(t *testing.T) {
 		t.Fatalf("expected 1 battle.turn for each, got host=%d, guest=%d", len(hostTurns), len(guestTurns))
 	}
 
-	turnPayload, ok := hostTurns[0].payload.(map[string]any)
+	turnPayload, ok := hostTurns[0].payload.(BattleTurnPayload)
 	if !ok {
 		t.Fatalf("invalid turn payload structure")
 	}
-	turnPlayerID := turnPayload["turnPlayerId"].(string)
+	turnPlayerID := turnPayload.TurnPlayerID
 	if turnPlayerID != pHost.ID && turnPlayerID != pGuest.ID {
 		t.Errorf("turnPlayerId %q is neither host nor guest", turnPlayerID)
 	}
@@ -140,8 +140,8 @@ func TestBattle_StrictAlternationAndShots(t *testing.T) {
 	_ = mgr.SubmitFleet(pHost.ID, validFleetForTest())
 	_ = mgr.SubmitFleet(pGuest.ID, validGuestFleetForTest())
 
-	turnPayload := filterMessages(sHost, "battle.turn")[0].payload.(map[string]any)
-	firstShooter := turnPayload["turnPlayerId"].(string)
+	turnPayload := filterMessages(sHost, "battle.turn")[0].payload.(BattleTurnPayload)
+	firstShooter := turnPayload.TurnPlayerID
 	secondShooter := pHost.ID
 	if firstShooter == pHost.ID {
 		secondShooter = pGuest.ID
@@ -167,9 +167,9 @@ func TestBattle_StrictAlternationAndShots(t *testing.T) {
 	if len(hostResults) != 1 {
 		t.Fatalf("expected 1 shotResult on host, got %d", len(hostResults))
 	}
-	resPayload := hostResults[0].payload.(map[string]any)
-	if resPayload["result"] != game.ShotResultMiss {
-		t.Errorf("expected miss at (0,9), got %v", resPayload["result"])
+	resPayload := hostResults[0].payload.(BattleShotResultPayload)
+	if resPayload.Result != game.ShotResultMiss {
+		t.Errorf("expected miss at (0,9), got %v", resPayload.Result)
 	}
 
 	// Turn must have alternated to secondShooter
@@ -177,7 +177,7 @@ func TestBattle_StrictAlternationAndShots(t *testing.T) {
 	if len(hostTurns) != 1 {
 		t.Fatalf("expected 1 turn update after shot, got %d", len(hostTurns))
 	}
-	nextTurn := hostTurns[0].payload.(map[string]any)["turnPlayerId"].(string)
+	nextTurn := hostTurns[0].payload.(BattleTurnPayload).TurnPlayerID
 	if nextTurn != secondShooter {
 		t.Errorf("expected turn to alternate to %s, got %s", secondShooter, nextTurn)
 	}
@@ -212,8 +212,8 @@ func TestBattle_TurnTimerAutoShot(t *testing.T) {
 	_ = mgr.SubmitFleet(pHost.ID, validFleetForTest())
 	_ = mgr.SubmitFleet(pGuest.ID, validGuestFleetForTest())
 
-	turnPayload := filterMessages(sHost, "battle.turn")[0].payload.(map[string]any)
-	firstShooter := turnPayload["turnPlayerId"].(string)
+	turnPayload := filterMessages(sHost, "battle.turn")[0].payload.(BattleTurnPayload)
+	firstShooter := turnPayload.TurnPlayerID
 	secondShooter := pHost.ID
 	if firstShooter == pHost.ID {
 		secondShooter = pGuest.ID
@@ -230,12 +230,12 @@ func TestBattle_TurnTimerAutoShot(t *testing.T) {
 	if len(hostResults) != 1 {
 		t.Fatalf("expected 1 auto shotResult, got %d", len(hostResults))
 	}
-	shotPayload := hostResults[0].payload.(map[string]any)
-	if shotPayload["by"] != firstShooter {
-		t.Errorf("expected shooter to be %s, got %s", firstShooter, shotPayload["by"])
+	shotPayload := hostResults[0].payload.(BattleShotResultPayload)
+	if shotPayload.By != firstShooter {
+		t.Errorf("expected shooter to be %s, got %s", firstShooter, shotPayload.By)
 	}
-	if shotPayload["auto"] != true {
-		t.Errorf("expected auto: true on turn timeout shot, got %v", shotPayload["auto"])
+	if !shotPayload.Auto {
+		t.Errorf("expected auto: true on turn timeout shot, got %v", shotPayload.Auto)
 	}
 
 	// Turn must have automatically advanced to secondShooter
@@ -243,7 +243,7 @@ func TestBattle_TurnTimerAutoShot(t *testing.T) {
 	if len(turnMsgs) != 1 {
 		t.Fatalf("expected 1 turn message after auto-shot, got %d", len(turnMsgs))
 	}
-	nextShooter := turnMsgs[0].payload.(map[string]any)["turnPlayerId"].(string)
+	nextShooter := turnMsgs[0].payload.(BattleTurnPayload).TurnPlayerID
 	if nextShooter != secondShooter {
 		t.Errorf("expected turn to advance to %s, got %s", secondShooter, nextShooter)
 	}
@@ -261,8 +261,8 @@ func TestBattle_WinResolution(t *testing.T) {
 	_ = mgr.SubmitFleet(pHost.ID, validFleetForTest())
 	_ = mgr.SubmitFleet(pGuest.ID, validGuestFleetForTest())
 
-	turnPayload := filterMessages(sHost, "battle.turn")[0].payload.(map[string]any)
-	currentShooter := turnPayload["turnPlayerId"].(string)
+	turnPayload := filterMessages(sHost, "battle.turn")[0].payload.(BattleTurnPayload)
+	currentShooter := turnPayload.TurnPlayerID
 
 	// List of all coordinates on Guest's fleet (total 17 cells)
 	guestCells := []game.Coord{
@@ -299,12 +299,12 @@ func TestBattle_WinResolution(t *testing.T) {
 	if len(gameOverMsgs) != 1 {
 		t.Fatalf("expected 1 game.over message on match win, got %d", len(gameOverMsgs))
 	}
-	gameResult := gameOverMsgs[0].payload.(map[string]any)
-	if gameResult["winnerPlayerId"] != pHost.ID {
-		t.Errorf("expected winner to be host %s, got %s", pHost.ID, gameResult["winnerPlayerId"])
+	gameResult := gameOverMsgs[0].payload.(GameOverPayload)
+	if gameResult.WinnerPlayerID != pHost.ID {
+		t.Errorf("expected winner to be host %s, got %s", pHost.ID, gameResult.WinnerPlayerID)
 	}
-	if gameResult["reason"] != "all_sunk" {
-		t.Errorf("expected reason all_sunk, got %v", gameResult["reason"])
+	if gameResult.Reason != "all_sunk" {
+		t.Errorf("expected reason all_sunk, got %v", gameResult.Reason)
 	}
 
 	// Subsequent shots must be rejected with ErrGameOver
@@ -336,7 +336,7 @@ func TestBattle_PlacementTimeoutStartsBattle(t *testing.T) {
 	}
 
 	// Verify both players can take battle turns immediately
-	firstShooter := hostTurns[0].payload.(map[string]any)["turnPlayerId"].(string)
+	firstShooter := hostTurns[0].payload.(BattleTurnPayload).TurnPlayerID
 	err := mgr.FireShot(firstShooter, game.Coord{X: 0, Y: 0})
 	if err != nil {
 		t.Fatalf("first shooter fire failed in auto-started battle: %v", err)

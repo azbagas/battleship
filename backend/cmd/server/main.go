@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -75,24 +74,12 @@ func initLogger() {
 
 func main() {
 	initLogger()
+	cfg := loadConfig()
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	addr := fmt.Sprintf(":%s", port)
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = os.Getenv("SQLITE_PATH")
-	}
-	if dbPath == "" {
-		dbPath = "battleship.db"
-	}
-
-	gameStore, err := store.New(dbPath)
+	addr := fmt.Sprintf(":%s", cfg.Port)
+	gameStore, err := store.New(cfg.DBPath)
 	if err != nil {
-		slog.Error("failed to initialize sqlite store", "dbPath", dbPath, "error", err)
+		slog.Error("failed to initialize sqlite store", "dbPath", cfg.DBPath, "error", err)
 		os.Exit(1)
 	}
 	defer func() {
@@ -103,52 +90,7 @@ func main() {
 
 	sessionRegistry := lobby.NewSessionRegistry()
 	lobbyManager := lobby.NewLobbyManager(sessionRegistry, lobby.WithStore(gameStore))
-
-	var wsOpts []ws.HandlerOption
-	if allowedOriginsStr := os.Getenv("ALLOWED_ORIGINS"); allowedOriginsStr != "" {
-		parts := strings.Split(allowedOriginsStr, ",")
-		var origins []string
-		for _, p := range parts {
-			if trimmed := strings.TrimSpace(p); trimmed != "" {
-				origins = append(origins, trimmed)
-			}
-		}
-		if len(origins) > 0 {
-			wsOpts = append(wsOpts, ws.WithAllowedOrigins(origins))
-		}
-	}
-
-	if maxPayloadStr := os.Getenv("MAX_PAYLOAD_BYTES"); maxPayloadStr != "" {
-		if bytes, err := strconv.ParseInt(maxPayloadStr, 10, 64); err == nil && bytes > 0 {
-			wsOpts = append(wsOpts, ws.WithMaxPayloadBytes(bytes))
-		}
-	}
-
-	if maxConnsIPStr := os.Getenv("MAX_CONNS_PER_IP"); maxConnsIPStr != "" {
-		if maxConns, err := strconv.Atoi(maxConnsIPStr); err == nil && maxConns > 0 {
-			wsOpts = append(wsOpts, ws.WithIPLimit(maxConns))
-		}
-	}
-
-	rateLimit := 10.0
-	rateBurst := 20.0
-	if rateStr := os.Getenv("RATE_LIMIT_MESSAGES_PER_SEC"); rateStr != "" {
-		if r, err := strconv.ParseFloat(rateStr, 64); err == nil && r > 0 {
-			rateLimit = r
-		}
-	}
-	if burstStr := os.Getenv("RATE_LIMIT_BURST"); burstStr != "" {
-		if b, err := strconv.ParseFloat(burstStr, 64); err == nil && b > 0 {
-			rateBurst = b
-		}
-	}
-	wsOpts = append(wsOpts, ws.WithRateLimit(rateLimit, rateBurst))
-
-	if trustProxyStr := strings.TrimSpace(os.Getenv("TRUST_PROXY")); strings.EqualFold(trustProxyStr, "true") || trustProxyStr == "1" {
-		wsOpts = append(wsOpts, ws.WithTrustProxy(true))
-	}
-
-	wsHandler := ws.NewHandler(sessionRegistry, lobbyManager, wsOpts...)
+	wsHandler := ws.NewHandler(sessionRegistry, lobbyManager, buildWSOptions(cfg)...)
 
 	srv := &http.Server{
 		Addr:              addr,

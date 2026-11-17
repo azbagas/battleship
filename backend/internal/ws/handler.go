@@ -17,125 +17,6 @@ import (
 	"github.com/azbagas/battleship/backend/internal/lobby"
 )
 
-const (
-	defaultWriteTimeout = 5 * time.Second
-	defaultOutboxSize   = 64
-)
-
-type outboundFrame struct {
-	msgType string
-	payload any
-}
-
-// wsSender serializes outgoing WebSocket writes for a single client connection.
-// Pre-handshake frames write synchronously with a write timeout; post-handshake
-// frames enqueue onto a bounded outbox so slow consumers cannot block broadcasts.
-type wsSender struct {
-	mu     sync.Mutex
-	conn   *websocket.Conn
-	ctx    context.Context
-	outbox chan outboundFrame
-	async  bool
-	closed bool
-	wg     sync.WaitGroup
-}
-
-// StartAsync transitions the sender to a bounded non-blocking outbox drained by a
-// dedicated writer goroutine tied to ctx.
-func (s *wsSender) StartAsync(ctx context.Context) {
-	s.mu.Lock()
-	if s.closed || s.async {
-		s.mu.Unlock()
-		return
-	}
-	s.async = true
-	s.outbox = make(chan outboundFrame, defaultOutboxSize)
-	s.wg.Add(1)
-	s.mu.Unlock()
-
-	go s.writeLoop(ctx)
-}
-
-func (s *wsSender) writeLoop(ctx context.Context) {
-	defer s.wg.Done()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case frame, ok := <-s.outbox:
-			if !ok {
-				return
-			}
-			writeCtx, cancel := context.WithTimeout(ctx, defaultWriteTimeout)
-			err := writeJSON(writeCtx, s.conn, OutboundMessage{
-				Type:    MessageType(frame.msgType),
-				Payload: frame.payload,
-			})
-			cancel()
-			if err != nil {
-				s.closeOnSlowOrBroken("write failed")
-				return
-			}
-		}
-	}
-}
-
-func (s *wsSender) closeOnSlowOrBroken(reason string) {
-	s.mu.Lock()
-	if !s.closed {
-		s.closed = true
-		if s.async && s.outbox != nil {
-			close(s.outbox)
-		}
-	}
-	s.mu.Unlock()
-	_ = s.conn.Close(websocket.StatusGoingAway, reason)
-}
-
-// Stop closes the outbox (if active) and waits for the writer goroutine to exit.
-func (s *wsSender) Stop() {
-	s.mu.Lock()
-	if !s.closed {
-		s.closed = true
-		if s.async && s.outbox != nil {
-			close(s.outbox)
-		}
-	}
-	s.mu.Unlock()
-	s.wg.Wait()
-}
-
-// Send formats and transmits an outbound message envelope.
-func (s *wsSender) Send(msgType string, payload any) error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return errors.New("websocket sender closed")
-	}
-	if !s.async {
-		defer s.mu.Unlock()
-		writeCtx, cancel := context.WithTimeout(s.ctx, defaultWriteTimeout)
-		defer cancel()
-		return writeJSON(writeCtx, s.conn, OutboundMessage{
-			Type:    MessageType(msgType),
-			Payload: payload,
-		})
-	}
-
-	select {
-	case s.outbox <- outboundFrame{msgType: msgType, payload: payload}:
-		s.mu.Unlock()
-		return nil
-	default:
-		// Outbox is full: client is a slow consumer; detach it without blocking callers.
-		s.closed = true
-		close(s.outbox)
-		s.mu.Unlock()
-		_ = s.conn.Close(websocket.StatusGoingAway, "slow consumer")
-		return errors.New("outbound buffer full: slow consumer")
-	}
-}
-
 // HandlerOption configures Handler instances.
 type HandlerOption func(*Handler)
 
@@ -430,219 +311,204 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		slog.Debug("websocket message received", "playerId", player.ID, "type", inbound.Type)
-
-		switch inbound.Type {
-		case TypeLobbyCreate:
-			if _, err := h.lobby.CreateRoom(player.ID); err != nil {
-				h.handleLobbyError(sender, player.ID, inbound.Type, err)
-			}
-		case TypeLobbyCancel:
-			if err := h.lobby.CancelRoom(player.ID); err != nil {
-				h.handleLobbyError(sender, player.ID, inbound.Type, err)
-			}
-		case TypeLobbyJoin:
-			var joinPayload LobbyJoinPayload
-			if err := json.Unmarshal(inbound.Payload, &joinPayload); err != nil || joinPayload.RoomID == "" {
-				slog.Warn("invalid join payload", "playerId", player.ID)
-				_ = sendError(sender, ErrCodeBadRequest, "Invalid join payload: roomId is required")
-				continue
-			}
-			if _, err := h.lobby.JoinRoom(player.ID, joinPayload.RoomID); err != nil {
-				h.handleLobbyError(sender, player.ID, inbound.Type, err)
-			}
-		case TypeRoomReady:
-			if err := h.lobby.ReadyRoom(player.ID); err != nil {
-				h.handleLobbyError(sender, player.ID, inbound.Type, err)
-			}
-		case TypeRoomUnready:
-			if err := h.lobby.UnreadyRoom(player.ID); err != nil {
-				h.handleLobbyError(sender, player.ID, inbound.Type, err)
-			}
-		case TypeRoomLeave, TypeGameLeave:
-			if err := h.lobby.LeaveRoom(player.ID); err != nil {
-				h.handleLobbyError(sender, player.ID, inbound.Type, err)
-			}
-		case TypePlacementSubmit, TypePlacementReady:
-			var submitPayload PlacementSubmitPayload
-			if len(inbound.Payload) > 0 && string(inbound.Payload) != "null" && string(inbound.Payload) != "{}" {
-				if err := json.Unmarshal(inbound.Payload, &submitPayload); err != nil {
-					slog.Warn("invalid placement payload", "playerId", player.ID, "error", err)
-					_ = sendError(sender, ErrCodeBadRequest, "Invalid placement payload: malformed ships data")
-					continue
-				}
-			}
-			if submitPayload.Draft {
-				if err := h.lobby.UpdateDraftFleet(player.ID, submitPayload.Ships); err != nil {
-					h.handleLobbyError(sender, player.ID, inbound.Type, err)
-				}
-				continue
-			}
-			if err := h.lobby.SubmitFleet(player.ID, submitPayload.Ships); err != nil {
-				h.handleLobbyError(sender, player.ID, inbound.Type, err)
-			}
-		case TypeBattleFire:
-			var firePayload BattleFirePayload
-			if len(inbound.Payload) > 0 && string(inbound.Payload) != "null" && string(inbound.Payload) != "{}" {
-				if err := json.Unmarshal(inbound.Payload, &firePayload); err != nil {
-					slog.Warn("invalid battle fire payload", "playerId", player.ID, "error", err)
-					_ = sendError(sender, ErrCodeBadRequest, "Invalid battle fire payload: malformed coordinate")
-					continue
-				}
-			}
-			if err := h.lobby.FireShot(player.ID, firePayload.Cell); err != nil {
-				h.handleLobbyError(sender, player.ID, inbound.Type, err)
-			}
-		case TypeRematchAccept:
-			if err := h.lobby.AcceptRematch(player.ID); err != nil {
-				h.handleLobbyError(sender, player.ID, inbound.Type, err)
-			}
-		case TypeRematchDecline:
-			if err := h.lobby.DeclineRematch(player.ID); err != nil {
-				h.handleLobbyError(sender, player.ID, inbound.Type, err)
-			}
-		default:
-			slog.Debug("unhandled message type", "playerId", player.ID, "type", inbound.Type)
-		}
+		h.dispatchMessage(sender, player.ID, inbound)
 	}
+}
+
+func (h *Handler) dispatchMessage(sender *wsSender, playerID string, inbound InboundMessage) {
+	switch inbound.Type {
+	case TypeLobbyCreate:
+		if _, err := h.lobby.CreateRoom(playerID); err != nil {
+			h.handleLobbyError(sender, playerID, inbound.Type, err)
+		}
+	case TypeLobbyCancel:
+		if err := h.lobby.CancelRoom(playerID); err != nil {
+			h.handleLobbyError(sender, playerID, inbound.Type, err)
+		}
+	case TypeLobbyJoin:
+		var joinPayload LobbyJoinPayload
+		if err := json.Unmarshal(inbound.Payload, &joinPayload); err != nil || joinPayload.RoomID == "" {
+			slog.Warn("invalid join payload", "playerId", playerID)
+			_ = sendError(sender, ErrCodeBadRequest, "Invalid join payload: roomId is required")
+			return
+		}
+		if _, err := h.lobby.JoinRoom(playerID, joinPayload.RoomID); err != nil {
+			h.handleLobbyError(sender, playerID, inbound.Type, err)
+		}
+	case TypeRoomReady:
+		if err := h.lobby.ReadyRoom(playerID); err != nil {
+			h.handleLobbyError(sender, playerID, inbound.Type, err)
+		}
+	case TypeRoomUnready:
+		if err := h.lobby.UnreadyRoom(playerID); err != nil {
+			h.handleLobbyError(sender, playerID, inbound.Type, err)
+		}
+	case TypeRoomLeave, TypeGameLeave:
+		if err := h.lobby.LeaveRoom(playerID); err != nil {
+			h.handleLobbyError(sender, playerID, inbound.Type, err)
+		}
+	case TypePlacementSubmit, TypePlacementReady:
+		var submitPayload PlacementSubmitPayload
+		if err := unmarshalOptionalPayload(inbound.Payload, &submitPayload); err != nil {
+			slog.Warn("invalid placement payload", "playerId", playerID, "error", err)
+			_ = sendError(sender, ErrCodeBadRequest, "Invalid placement payload: malformed ships data")
+			return
+		}
+		if submitPayload.Draft {
+			if err := h.lobby.UpdateDraftFleet(playerID, submitPayload.Ships); err != nil {
+				h.handleLobbyError(sender, playerID, inbound.Type, err)
+			}
+			return
+		}
+		if err := h.lobby.SubmitFleet(playerID, submitPayload.Ships); err != nil {
+			h.handleLobbyError(sender, playerID, inbound.Type, err)
+		}
+	case TypeBattleFire:
+		var firePayload BattleFirePayload
+		if err := unmarshalOptionalPayload(inbound.Payload, &firePayload); err != nil {
+			slog.Warn("invalid battle fire payload", "playerId", playerID, "error", err)
+			_ = sendError(sender, ErrCodeBadRequest, "Invalid battle fire payload: malformed coordinate")
+			return
+		}
+		if err := h.lobby.FireShot(playerID, firePayload.Cell); err != nil {
+			h.handleLobbyError(sender, playerID, inbound.Type, err)
+		}
+	case TypeRematchAccept:
+		if err := h.lobby.AcceptRematch(playerID); err != nil {
+			h.handleLobbyError(sender, playerID, inbound.Type, err)
+		}
+	case TypeRematchDecline:
+		if err := h.lobby.DeclineRematch(playerID); err != nil {
+			h.handleLobbyError(sender, playerID, inbound.Type, err)
+		}
+	default:
+		slog.Debug("unhandled message type", "playerId", playerID, "type", inbound.Type)
+	}
+}
+
+func unmarshalOptionalPayload(raw json.RawMessage, dst any) error {
+	if len(raw) == 0 || string(raw) == "null" || string(raw) == "{}" {
+		return nil
+	}
+	return json.Unmarshal(raw, dst)
+}
+
+var lobbyErrorCodes = []struct {
+	target error
+	code   string
+}{
+	{lobby.ErrRoomCapReached, ErrCodeRoomCapReached},
+	{lobby.ErrAlreadyInRoom, ErrCodeAlreadyInRoom},
+	{lobby.ErrRoomNotFound, ErrCodeRoomNotFound},
+	{lobby.ErrRoomNotAvailable, ErrCodeRoomNotAvailable},
+	{lobby.ErrNotInWaitingRoom, ErrCodeNotInWaitingRoom},
+	{lobby.ErrCannotJoinOwnRoom, ErrCodeCannotJoinOwnRoom},
+	{lobby.ErrNotInReadyUp, ErrCodeNotInReadyUp},
+	{lobby.ErrNotInRoom, ErrCodeNotInRoom},
+	{lobby.ErrNotInPlacement, ErrCodeNotInPlacement},
+	{lobby.ErrFleetAlreadyLocked, ErrCodeFleetAlreadyLocked},
+	{lobby.ErrInvalidPlacement, ErrCodeInvalidPlacement},
+	{lobby.ErrNotInBattle, ErrCodeNotInBattle},
+	{lobby.ErrNotYourTurn, ErrCodeNotYourTurn},
+	{lobby.ErrGameOver, ErrCodeGameOver},
+	{lobby.ErrNotInFinished, ErrCodeNotInFinished},
+	{lobby.ErrRematchNotAllowed, ErrCodeRematchNotAllowed},
+	{lobby.ErrOpponentNotPresent, ErrCodeOpponentNotPresent},
+	{game.ErrCellAlreadyTargeted, ErrCodeCellAlreadyTargeted},
+	{game.ErrCellOutOfBounds, ErrCodeCellOutOfBounds},
 }
 
 // handleLobbyError translates lobby errors into protocol error codes and logs the rejection.
 func (h *Handler) handleLobbyError(sender *wsSender, playerID string, action MessageType, err error) {
 	code := ErrCodeBadRequest
-	switch {
-	case errors.Is(err, lobby.ErrRoomCapReached):
-		code = ErrCodeRoomCapReached
-	case errors.Is(err, lobby.ErrAlreadyInRoom):
-		code = ErrCodeAlreadyInRoom
-	case errors.Is(err, lobby.ErrRoomNotFound):
-		code = ErrCodeRoomNotFound
-	case errors.Is(err, lobby.ErrRoomNotAvailable):
-		code = ErrCodeRoomNotAvailable
-	case errors.Is(err, lobby.ErrNotInWaitingRoom):
-		code = ErrCodeNotInWaitingRoom
-	case errors.Is(err, lobby.ErrCannotJoinOwnRoom):
-		code = ErrCodeCannotJoinOwnRoom
-	case errors.Is(err, lobby.ErrNotInReadyUp):
-		code = ErrCodeNotInReadyUp
-	case errors.Is(err, lobby.ErrNotInRoom):
-		code = ErrCodeNotInRoom
-	case errors.Is(err, lobby.ErrNotInPlacement):
-		code = ErrCodeNotInPlacement
-	case errors.Is(err, lobby.ErrFleetAlreadyLocked):
-		code = ErrCodeFleetAlreadyLocked
-	case errors.Is(err, lobby.ErrInvalidPlacement):
-		code = ErrCodeInvalidPlacement
-	case errors.Is(err, lobby.ErrNotInBattle):
-		code = ErrCodeNotInBattle
-	case errors.Is(err, lobby.ErrNotYourTurn):
-		code = ErrCodeNotYourTurn
-	case errors.Is(err, lobby.ErrGameOver):
-		code = ErrCodeGameOver
-	case errors.Is(err, lobby.ErrNotInFinished):
-		code = ErrCodeNotInFinished
-	case errors.Is(err, lobby.ErrRematchNotAllowed):
-		code = ErrCodeRematchNotAllowed
-	case errors.Is(err, lobby.ErrOpponentNotPresent):
-		code = ErrCodeOpponentNotPresent
-	case errors.Is(err, game.ErrCellAlreadyTargeted):
-		code = ErrCodeCellAlreadyTargeted
-	case errors.Is(err, game.ErrCellOutOfBounds):
-		code = ErrCodeCellOutOfBounds
+	for _, mapping := range lobbyErrorCodes {
+		if errors.Is(err, mapping.target) {
+			code = mapping.code
+			break
+		}
 	}
 	slog.Warn("lobby action rejected", "playerId", playerID, "action", string(action), "code", code, "error", err)
 	_ = sendError(sender, code, err.Error())
+}
+
+func rejectHandshake(conn *websocket.Conn, sender *wsSender, code, msg, closeReason string) {
+	_ = sendError(sender, code, msg)
+	_ = conn.Close(websocket.StatusPolicyViolation, closeReason)
+}
+
+func (h *Handler) createHandshakePlayer(conn *websocket.Conn, sender *wsSender, name, remoteAddr, sessionKind string) (*lobby.Player, error) {
+	newPlayer, createErr := h.registry.CreatePlayer(name)
+	if createErr != nil {
+		slog.Warn("handshake rejected: invalid display name", "displayName", name, "remoteAddr", remoteAddr, "error", createErr)
+		rejectHandshake(conn, sender, ErrCodeInvalidName, createErr.Error(), "invalid display name")
+		return nil, createErr
+	}
+	slog.Info("player authenticated", "session", sessionKind, "playerId", newPlayer.ID, "displayName", newPlayer.DisplayName, "remoteAddr", remoteAddr)
+	return newPlayer, nil
 }
 
 // handleHandshake reads and processes the required hello handshake.
 func (h *Handler) handleHandshake(ctx context.Context, conn *websocket.Conn, sender *wsSender, remoteAddr string) (*lobby.Player, error) {
 	typ, msgBytes, err := conn.Read(ctx)
 	if err != nil {
-		_ = sendError(sender, ErrCodeInvalidHandshake, "Handshake timed out or failed to read")
-		_ = conn.Close(websocket.StatusPolicyViolation, "handshake timeout")
+		rejectHandshake(conn, sender, ErrCodeInvalidHandshake, "Handshake timed out or failed to read", "handshake timeout")
 		return nil, fmt.Errorf("read handshake: %w", err)
 	}
 
 	if typ != websocket.MessageText {
-		_ = sendError(sender, ErrCodeInvalidHandshake, "Expected text frame")
-		_ = conn.Close(websocket.StatusPolicyViolation, "expected text frame")
+		rejectHandshake(conn, sender, ErrCodeInvalidHandshake, "Expected text frame", "expected text frame")
 		return nil, errors.New("expected text frame")
 	}
 
 	var inbound InboundMessage
 	if err := json.Unmarshal(msgBytes, &inbound); err != nil {
-		_ = sendError(sender, ErrCodeBadRequest, "Malformed message JSON")
-		_ = conn.Close(websocket.StatusPolicyViolation, "malformed JSON")
+		rejectHandshake(conn, sender, ErrCodeBadRequest, "Malformed message JSON", "malformed JSON")
 		return nil, fmt.Errorf("unmarshal handshake: %w", err)
 	}
 
 	if inbound.Type != TypeHello {
-		_ = sendError(sender, ErrCodeInvalidHandshake, "First message must be hello")
-		_ = conn.Close(websocket.StatusPolicyViolation, "expected hello")
+		rejectHandshake(conn, sender, ErrCodeInvalidHandshake, "First message must be hello", "expected hello")
 		return nil, errors.New("expected hello message")
 	}
 
 	var payload HelloPayload
 	if err := json.Unmarshal(inbound.Payload, &payload); err != nil {
-		_ = sendError(sender, ErrCodeBadRequest, "Malformed hello payload")
-		_ = conn.Close(websocket.StatusPolicyViolation, "malformed hello payload")
+		rejectHandshake(conn, sender, ErrCodeBadRequest, "Malformed hello payload", "malformed hello payload")
 		return nil, fmt.Errorf("unmarshal hello payload: %w", err)
 	}
 
-	var player *lobby.Player
-
-	if payload.SessionToken != "" {
-		// Attempt to attach to existing session
-		attached, attachErr := h.registry.AttachConnection(payload.SessionToken)
-		if errors.Is(attachErr, lobby.ErrSessionAlreadyActive) {
-			slog.Warn("handshake rejected: session already active", "displayName", payload.Name, "remoteAddr", remoteAddr)
-			_ = sendError(sender, ErrCodeSessionAlreadyActive, "Session is already active in another connection")
-			_ = conn.Close(websocket.StatusPolicyViolation, "session already active")
-			return nil, lobby.ErrSessionAlreadyActive
-		}
-
-		if errors.Is(attachErr, lobby.ErrSessionNotFound) {
-			// Unknown token (e.g., server restart) -> issue fresh session
-			newPlayer, createErr := h.registry.CreatePlayer(payload.Name)
-			if createErr != nil {
-				slog.Warn("handshake rejected: invalid display name", "displayName", payload.Name, "remoteAddr", remoteAddr, "error", createErr)
-				_ = sendError(sender, ErrCodeInvalidName, createErr.Error())
-				_ = conn.Close(websocket.StatusPolicyViolation, "invalid display name")
-				return nil, createErr
-			}
-			player = newPlayer
-			slog.Info("player authenticated", "session", "new (reissued)", "playerId", player.ID, "displayName", player.DisplayName, "remoteAddr", remoteAddr)
-		} else if attachErr != nil {
-			slog.Warn("handshake rejected: failed to attach session", "remoteAddr", remoteAddr, "error", attachErr)
-			_ = sendError(sender, ErrCodeBadRequest, attachErr.Error())
-			_ = conn.Close(websocket.StatusPolicyViolation, "failed to attach session")
-			return nil, attachErr
-		} else {
-			// Successfully reconnected to existing session.
-			// Only allow display name updates when the player is not in an active room/match.
-			player = attached
-			if payload.Name != "" && player.CurrentRoomID == "" {
-				if updateErr := h.registry.UpdateDisplayName(player.SessionToken, payload.Name); updateErr == nil {
-					if updated, ok := h.registry.GetByToken(player.SessionToken); ok {
-						player = updated
-					}
-				}
-			}
-			slog.Info("player authenticated", "session", "resumed", "playerId", player.ID, "displayName", player.DisplayName, "remoteAddr", remoteAddr)
-		}
-	} else {
-		// No session token provided -> create fresh session
-		newPlayer, createErr := h.registry.CreatePlayer(payload.Name)
-		if createErr != nil {
-			slog.Warn("handshake rejected: invalid display name", "displayName", payload.Name, "remoteAddr", remoteAddr, "error", createErr)
-			_ = sendError(sender, ErrCodeInvalidName, createErr.Error())
-			_ = conn.Close(websocket.StatusPolicyViolation, "invalid display name")
-			return nil, createErr
-		}
-		player = newPlayer
-		slog.Info("player authenticated", "session", "new", "playerId", player.ID, "displayName", player.DisplayName, "remoteAddr", remoteAddr)
+	if payload.SessionToken == "" {
+		return h.createHandshakePlayer(conn, sender, payload.Name, remoteAddr, "new")
 	}
 
-	return player, nil
+	attached, attachErr := h.registry.AttachConnection(payload.SessionToken)
+	switch {
+	case errors.Is(attachErr, lobby.ErrSessionAlreadyActive):
+		slog.Warn("handshake rejected: session already active", "displayName", payload.Name, "remoteAddr", remoteAddr)
+		rejectHandshake(conn, sender, ErrCodeSessionAlreadyActive, "Session is already active in another connection", "session already active")
+		return nil, lobby.ErrSessionAlreadyActive
+
+	case errors.Is(attachErr, lobby.ErrSessionNotFound):
+		return h.createHandshakePlayer(conn, sender, payload.Name, remoteAddr, "new (reissued)")
+
+	case attachErr != nil:
+		slog.Warn("handshake rejected: failed to attach session", "remoteAddr", remoteAddr, "error", attachErr)
+		rejectHandshake(conn, sender, ErrCodeBadRequest, attachErr.Error(), "failed to attach session")
+		return nil, attachErr
+
+	default:
+		// Only allow display name updates when the player is not in an active room/match.
+		player := attached
+		if payload.Name != "" && player.CurrentRoomID == "" {
+			if updateErr := h.registry.UpdateDisplayName(player.SessionToken, payload.Name); updateErr == nil {
+				if updated, ok := h.registry.GetByToken(player.SessionToken); ok {
+					player = updated
+				}
+			}
+		}
+		slog.Info("player authenticated", "session", "resumed", "playerId", player.ID, "displayName", player.DisplayName, "remoteAddr", remoteAddr)
+		return player, nil
+	}
 }
 
 // heartbeatLoop periodically pings the client to detect dead connections.

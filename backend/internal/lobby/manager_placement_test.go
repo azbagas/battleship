@@ -136,12 +136,12 @@ func TestPlacement_SubmitValidFleetAndOpponentReadyNotification(t *testing.T) {
 	for _, m := range sGuest.getMessages() {
 		if m.msgType == "placement.opponentReady" {
 			guestOpponentReadyFound = true
-			payloadMap, ok := m.payload.(map[string]any)
+			payload, ok := m.payload.(PlacementOpponentReadyPayload)
 			if !ok {
 				t.Fatalf("unexpected opponentReady payload type: %T", m.payload)
 			}
-			if _, exists := payloadMap["ships"]; exists {
-				t.Fatal("SECURITY LEAK: placement.opponentReady leaked ship coordinates!")
+			if payload.RoomID != room.ID {
+				t.Fatalf("expected roomId %q, got %q", room.ID, payload.RoomID)
 			}
 		}
 	}
@@ -246,7 +246,7 @@ func TestPlacement_60SecondTimeoutAutoPlacement(t *testing.T) {
 	hostAutoConfirmed := false
 	for _, m := range sHost.getMessages() {
 		if m.msgType == "placement.confirmed" {
-			if pl, ok := m.payload.(map[string]any); ok && pl["auto"] == true {
+			if pl, ok := m.payload.(PlacementConfirmedPayload); ok && pl.Auto {
 				hostAutoConfirmed = true
 			}
 		}
@@ -258,7 +258,7 @@ func TestPlacement_60SecondTimeoutAutoPlacement(t *testing.T) {
 	guestAutoConfirmed := false
 	for _, m := range sGuest.getMessages() {
 		if m.msgType == "placement.confirmed" {
-			if pl, ok := m.payload.(map[string]any); ok && pl["auto"] == true {
+			if pl, ok := m.payload.(PlacementConfirmedPayload); ok && pl.Auto {
 				guestAutoConfirmed = true
 			}
 		}

@@ -2,9 +2,9 @@ package ws
 
 import (
 	"encoding/json"
-	"time"
 
 	"github.com/azbagas/battleship/backend/internal/game"
+	"github.com/azbagas/battleship/backend/internal/lobby"
 )
 
 // MessageType represents the domain-action identifier of a WebSocket message.
@@ -87,16 +87,10 @@ type PlacementSubmitPayload struct {
 }
 
 // PlacementConfirmedPayload confirms a player's locked-in fleet.
-type PlacementConfirmedPayload struct {
-	Confirmed bool              `json:"confirmed"`
-	Ships     []game.PlacedShip `json:"ships,omitempty"`
-	Auto      bool              `json:"auto,omitempty"`
-}
+type PlacementConfirmedPayload = lobby.PlacementConfirmedPayload
 
 // PlacementOpponentReadyPayload notifies a player that their opponent locked in their fleet.
-type PlacementOpponentReadyPayload struct {
-	RoomID string `json:"roomId"`
-}
+type PlacementOpponentReadyPayload = lobby.PlacementOpponentReadyPayload
 
 // BattleFirePayload represents a player's intent to fire at a target cell.
 type BattleFirePayload struct {
@@ -104,49 +98,28 @@ type BattleFirePayload struct {
 }
 
 // BattleStartPayload announces the start of combat and designated first player.
-type BattleStartPayload struct {
-	FirstPlayerID string `json:"firstPlayerId"`
-}
+type BattleStartPayload = lobby.BattleStartPayload
 
 // BattleShotResultPayload broadcasts the outcome of a shot to both players.
-type BattleShotResultPayload struct {
-	By       string             `json:"by"`
-	Cell     game.Coord         `json:"cell"`
-	Result   game.ShotResult    `json:"result"`
-	SunkShip *game.SunkShipInfo `json:"sunkShip,omitempty"`
-	Auto     bool               `json:"auto,omitempty"`
-}
+type BattleShotResultPayload = lobby.BattleShotResultPayload
 
 // BattleTurnPayload announces the active shooter and deadline for the turn.
-type BattleTurnPayload struct {
-	TurnPlayerID string `json:"turnPlayerId"`
-	Deadline     string `json:"deadline"`
-}
+type BattleTurnPayload = lobby.BattleTurnPayload
 
 // GameOverPayload broadcasts match conclusion when all 5 vessels of a fleet are sunk.
-type GameOverPayload struct {
-	WinnerPlayerID string `json:"winnerPlayerId"`
-	Reason         string `json:"reason"`
-	TotalShots     int    `json:"totalShots"`
-}
+type GameOverPayload = lobby.GameOverPayload
 
 // OpponentDisconnectedPayload notifies a player that their opponent lost connection.
-type OpponentDisconnectedPayload struct {
-	GraceDeadline time.Time `json:"graceDeadline"`
-}
+type OpponentDisconnectedPayload = lobby.OpponentDisconnectedPayload
 
 // OpponentReconnectedPayload notifies a player that their opponent reconnected.
-type OpponentReconnectedPayload struct{}
+type OpponentReconnectedPayload = lobby.OpponentReconnectedPayload
 
 // RematchOfferedPayload broadcasts a rematch offer to players.
-type RematchOfferedPayload struct {
-	By string `json:"by"`
-}
+type RematchOfferedPayload = lobby.RematchOfferedPayload
 
 // RematchCancelledPayload announces cancellation of a rematch offer.
-type RematchCancelledPayload struct {
-	Reason string `json:"reason"`
-}
+type RematchCancelledPayload = lobby.RematchCancelledPayload
 
 // Standard protocol error codes.
 const (

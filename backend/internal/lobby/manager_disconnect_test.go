@@ -72,13 +72,12 @@ func TestDisconnect_Placement_ReconnectWithin60s(t *testing.T) {
 	for _, m := range hostMsgs {
 		if m.msgType == "opponent.disconnected" {
 			foundDisconnect = true
-			payload, ok := m.payload.(map[string]any)
+			payload, ok := m.payload.(OpponentDisconnectedPayload)
 			if !ok {
-				t.Fatalf("expected map payload for opponent.disconnected, got %T", m.payload)
+				t.Fatalf("expected OpponentDisconnectedPayload for opponent.disconnected, got %T", m.payload)
 			}
-			deadline, ok := payload["graceDeadline"].(time.Time)
-			if !ok || deadline.IsZero() {
-				t.Fatalf("expected valid graceDeadline, got %v", payload["graceDeadline"])
+			if payload.GraceDeadline.IsZero() {
+				t.Fatalf("expected valid graceDeadline, got %v", payload.GraceDeadline)
 			}
 		}
 	}
@@ -155,12 +154,12 @@ func TestDisconnect_Placement_TimeoutForfeit(t *testing.T) {
 	for _, m := range hostMsgs {
 		if m.msgType == "game.over" {
 			foundGameOver = true
-			payload := m.payload.(map[string]any)
-			if payload["winnerPlayerId"] != pHost.ID {
-				t.Errorf("expected winner %v, got %v", pHost.ID, payload["winnerPlayerId"])
+			payload := m.payload.(GameOverPayload)
+			if payload.WinnerPlayerID != pHost.ID {
+				t.Errorf("expected winner %v, got %v", pHost.ID, payload.WinnerPlayerID)
 			}
-			if payload["reason"] != "disconnect_timeout" {
-				t.Errorf("expected reason disconnect_timeout, got %v", payload["reason"])
+			if payload.Reason != "disconnect_timeout" {
+				t.Errorf("expected reason disconnect_timeout, got %v", payload.Reason)
 			}
 		}
 	}
@@ -242,12 +241,12 @@ func TestDisconnect_Battle_TimeoutForfeit(t *testing.T) {
 	for _, m := range guestMsgs {
 		if m.msgType == "game.over" {
 			foundGameOver = true
-			payload := m.payload.(map[string]any)
-			if payload["winnerPlayerId"] != pGuest.ID {
-				t.Errorf("expected winner %v, got %v", pGuest.ID, payload["winnerPlayerId"])
+			payload := m.payload.(GameOverPayload)
+			if payload.WinnerPlayerID != pGuest.ID {
+				t.Errorf("expected winner %v, got %v", pGuest.ID, payload.WinnerPlayerID)
 			}
-			if payload["reason"] != "disconnect_timeout" {
-				t.Errorf("expected reason disconnect_timeout, got %v", payload["reason"])
+			if payload.Reason != "disconnect_timeout" {
+				t.Errorf("expected reason disconnect_timeout, got %v", payload.Reason)
 			}
 		}
 	}
@@ -320,12 +319,12 @@ func TestExplicitForfeit_Placement(t *testing.T) {
 	for _, m := range guestMsgs {
 		if m.msgType == "game.over" {
 			foundGameOver = true
-			payload := m.payload.(map[string]any)
-			if payload["winnerPlayerId"] != pGuest.ID {
-				t.Errorf("expected winner %v, got %v", pGuest.ID, payload["winnerPlayerId"])
+			payload := m.payload.(GameOverPayload)
+			if payload.WinnerPlayerID != pGuest.ID {
+				t.Errorf("expected winner %v, got %v", pGuest.ID, payload.WinnerPlayerID)
 			}
-			if payload["reason"] != "forfeit" {
-				t.Errorf("expected reason forfeit, got %v", payload["reason"])
+			if payload.Reason != "forfeit" {
+				t.Errorf("expected reason forfeit, got %v", payload.Reason)
 			}
 		}
 	}
@@ -370,12 +369,12 @@ func TestExplicitForfeit_Battle(t *testing.T) {
 	for _, m := range hostMsgs {
 		if m.msgType == "game.over" {
 			foundGameOver = true
-			payload := m.payload.(map[string]any)
-			if payload["winnerPlayerId"] != pHost.ID {
-				t.Errorf("expected winner %v, got %v", pHost.ID, payload["winnerPlayerId"])
+			payload := m.payload.(GameOverPayload)
+			if payload.WinnerPlayerID != pHost.ID {
+				t.Errorf("expected winner %v, got %v", pHost.ID, payload.WinnerPlayerID)
 			}
-			if payload["reason"] != "forfeit" {
-				t.Errorf("expected reason forfeit, got %v", payload["reason"])
+			if payload.Reason != "forfeit" {
+				t.Errorf("expected reason forfeit, got %v", payload.Reason)
 			}
 		}
 	}

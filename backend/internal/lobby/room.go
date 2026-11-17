@@ -6,6 +6,16 @@ import (
 	"github.com/azbagas/battleship/backend/internal/game"
 )
 
+const (
+	placementTimeout = 60 * time.Second
+	turnTimeout      = 30 * time.Second
+
+	endReasonAllSunk           = "all_sunk"
+	endReasonForfeit           = "forfeit"
+	endReasonDisconnectTimeout = "disconnect_timeout"
+	endReasonAbandoned         = "abandoned"
+)
+
 // RoomPhase represents the lifecycle stage of a game room.
 type RoomPhase string
 
@@ -51,6 +61,55 @@ type Room struct {
 	Recorded                bool
 	HostRematch             bool
 	GuestRematch            bool
+}
+
+// stopDisconnectTimers stops all disconnect grace timers and clears their deadlines.
+func (r *Room) stopDisconnectTimers() {
+	if r.DisconnectTimer != nil {
+		r.DisconnectTimer.Stop()
+		r.DisconnectTimer = nil
+	}
+	if r.HostDisconnectTimer != nil {
+		r.HostDisconnectTimer.Stop()
+		r.HostDisconnectTimer = nil
+	}
+	if r.GuestDisconnectTimer != nil {
+		r.GuestDisconnectTimer.Stop()
+		r.GuestDisconnectTimer = nil
+	}
+	r.HostDisconnectDeadline = time.Time{}
+	r.GuestDisconnectDeadline = time.Time{}
+}
+
+// stopMatchTimers stops active placement and turn timers.
+func (r *Room) stopMatchTimers() {
+	if r.PlacementTimer != nil {
+		r.PlacementTimer.Stop()
+		r.PlacementTimer = nil
+	}
+	if r.TurnTimer != nil {
+		r.TurnTimer.Stop()
+		r.TurnTimer = nil
+	}
+}
+
+// stopAllTimers stops all disconnect and match timers associated with the room.
+func (r *Room) stopAllTimers() {
+	r.stopDisconnectTimers()
+	r.stopMatchTimers()
+}
+
+// roleAndOpponent returns the player's role ("host" or "guest"), their opponent's ID,
+// and whether playerID belongs to this room.
+func (r *Room) roleAndOpponent(playerID string) (string, string, bool) {
+	switch playerID {
+	case r.HostPlayerID:
+		return "host", r.GuestPlayerID, true
+	case r.GuestPlayerID:
+		return "guest", r.HostPlayerID, true
+	default:
+		return "", "", false
+	}
 }
 
 // ShotRecord logs an individual shot fired during battle.

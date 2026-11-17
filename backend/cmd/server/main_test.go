@@ -84,3 +84,47 @@ func TestInitLogger(t *testing.T) {
 	initLogger()
 }
 
+func TestLoadConfig_DefaultsAndOverrides(t *testing.T) {
+	t.Setenv("PORT", "")
+	t.Setenv("DB_PATH", "")
+	t.Setenv("SQLITE_PATH", "")
+	t.Setenv("ALLOWED_ORIGINS", "")
+	t.Setenv("MAX_PAYLOAD_BYTES", "")
+	t.Setenv("MAX_CONNS_PER_IP", "")
+	t.Setenv("RATE_LIMIT_MESSAGES_PER_SEC", "")
+	t.Setenv("RATE_LIMIT_BURST", "")
+	t.Setenv("TRUST_PROXY", "")
+
+	def := loadConfig()
+	if def.Port != "8080" || def.DBPath != "battleship.db" || def.RateLimit != 10.0 || def.RateBurst != 20.0 || def.TrustProxy {
+		t.Fatalf("unexpected defaults: %+v", def)
+	}
+
+	t.Setenv("SQLITE_PATH", "fallback.db")
+	if cfg := loadConfig(); cfg.DBPath != "fallback.db" {
+		t.Fatalf("expected SQLITE_PATH fallback, got %q", cfg.DBPath)
+	}
+
+	t.Setenv("PORT", "9090")
+	t.Setenv("DB_PATH", "custom.db")
+	t.Setenv("ALLOWED_ORIGINS", " https://a.example , , https://b.example ")
+	t.Setenv("MAX_PAYLOAD_BYTES", "16384")
+	t.Setenv("MAX_CONNS_PER_IP", "25")
+	t.Setenv("RATE_LIMIT_MESSAGES_PER_SEC", "15")
+	t.Setenv("RATE_LIMIT_BURST", "30")
+	t.Setenv("TRUST_PROXY", "true")
+
+	ov := loadConfig()
+	if ov.Port != "9090" || ov.DBPath != "custom.db" || ov.MaxPayloadBytes != 16384 || ov.MaxConnsPerIP != 25 || ov.RateLimit != 15 || ov.RateBurst != 30 || !ov.TrustProxy {
+		t.Fatalf("unexpected overrides: %+v", ov)
+	}
+	if len(ov.AllowedOrigins) != 2 || ov.AllowedOrigins[0] != "https://a.example" || ov.AllowedOrigins[1] != "https://b.example" {
+		t.Fatalf("unexpected AllowedOrigins: %+v", ov.AllowedOrigins)
+	}
+
+	opts := buildWSOptions(ov)
+	if len(opts) != 5 {
+		t.Fatalf("expected 5 ws options when all overrides active, got %d", len(opts))
+	}
+}
+

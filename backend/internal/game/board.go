@@ -66,16 +66,7 @@ func (b *Board) FireShot(cell Coord) (ShotOutcome, error) {
 				b.Shots[cell] = ShotResultHit
 
 				// Check if all cells of this ship are now hit
-				allHit := true
-				for _, c := range cells {
-					res, hit := b.Shots[c]
-					if !hit || (res != ShotResultHit && res != ShotResultSunk) {
-						allHit = false
-						break
-					}
-				}
-
-				if allHit {
+				if isShipSunk(b.Shots, cells) {
 					// Mark all cells of this ship as sunk
 					for _, c := range cells {
 						b.Shots[c] = ShotResultSunk
@@ -107,6 +98,17 @@ func (b *Board) FireShot(cell Coord) (ShotOutcome, error) {
 	}, nil
 }
 
+// isShipSunk reports whether every cell occupied by a ship has been hit or sunk.
+func isShipSunk(shots map[Coord]ShotResult, cells []Coord) bool {
+	for _, c := range cells {
+		res, hit := shots[c]
+		if !hit || (res != ShotResultHit && res != ShotResultSunk) {
+			return false
+		}
+	}
+	return true
+}
+
 // SunkShips returns information on all ships that have been completely sunk on this board.
 func (b *Board) SunkShips() []SunkShipInfo {
 	if b.Shots == nil {
@@ -120,16 +122,7 @@ func (b *Board) SunkShips() []SunkShipInfo {
 			continue
 		}
 
-		allHit := true
-		for _, c := range cells {
-			res, hit := b.Shots[c]
-			if !hit || (res != ShotResultHit && res != ShotResultSunk) {
-				allHit = false
-				break
-			}
-		}
-
-		if allHit {
+		if isShipSunk(b.Shots, cells) {
 			sunk = append(sunk, SunkShipInfo{
 				Type:  ship.Type,
 				Cells: cells,
@@ -153,6 +146,36 @@ func (b *Board) AllShipsSunk() bool {
 	return len(b.SunkShips()) == len(b.Ships)
 }
 
+// validateFleetShips checks ship types, uniqueness, bounds, and overlap for a fleet slice.
+func validateFleetShips(ships []PlacedShip, errPrefix string) (map[ShipType]bool, error) {
+	seenTypes := make(map[ShipType]bool, len(StandardFleetTypes))
+	occupied := [GridWidth][GridHeight]bool{}
+
+	for _, ship := range ships {
+		if _, exists := StandardShipLengths[ship.Type]; !exists {
+			return nil, fmt.Errorf("%w: %q", ErrUnknownShipType, ship.Type)
+		}
+		if seenTypes[ship.Type] {
+			return nil, fmt.Errorf("%w: %q", ErrDuplicateShipType, ship.Type)
+		}
+		seenTypes[ship.Type] = true
+
+		cells, err := ship.Cells()
+		if err != nil {
+			return nil, fmt.Errorf("%s%q: %w", errPrefix, ship.Type, err)
+		}
+
+		for _, c := range cells {
+			if occupied[c.X][c.Y] {
+				return nil, fmt.Errorf("%w at (%d,%d) by %s%q", ErrShipOverlap, c.X, c.Y, errPrefix, ship.Type)
+			}
+			occupied[c.X][c.Y] = true
+		}
+	}
+
+	return seenTypes, nil
+}
+
 // ValidateFleet checks that a fleet of 5 ships meets all Battleship rules:
 // 1. Exactly 5 ships.
 // 2. Exactly one Carrier (5), Battleship (4), Cruiser (3), Submarine (3), and Destroyer (2).
@@ -165,29 +188,9 @@ func ValidateFleet(ships []PlacedShip) error {
 		return fmt.Errorf("%w: expected %d, got %d", ErrInvalidShipCount, len(StandardFleetTypes), len(ships))
 	}
 
-	seenTypes := make(map[ShipType]bool, len(StandardFleetTypes))
-	occupied := [GridWidth][GridHeight]bool{}
-
-	for _, ship := range ships {
-		if _, exists := StandardShipLengths[ship.Type]; !exists {
-			return fmt.Errorf("%w: %q", ErrUnknownShipType, ship.Type)
-		}
-		if seenTypes[ship.Type] {
-			return fmt.Errorf("%w: %q", ErrDuplicateShipType, ship.Type)
-		}
-		seenTypes[ship.Type] = true
-
-		cells, err := ship.Cells()
-		if err != nil {
-			return fmt.Errorf("ship %q: %w", ship.Type, err)
-		}
-
-		for _, c := range cells {
-			if occupied[c.X][c.Y] {
-				return fmt.Errorf("%w at (%d,%d) by ship %q", ErrShipOverlap, c.X, c.Y, ship.Type)
-			}
-			occupied[c.X][c.Y] = true
-		}
+	seenTypes, err := validateFleetShips(ships, "ship ")
+	if err != nil {
+		return err
 	}
 
 	for _, requiredType := range StandardFleetTypes {
@@ -220,32 +223,8 @@ func ValidatePartialFleet(ships []PlacedShip) error {
 		return fmt.Errorf("%w: got %d ships", ErrInvalidShipCount, len(ships))
 	}
 
-	occupied := [GridWidth][GridHeight]bool{}
-	seenTypes := make(map[ShipType]bool, len(StandardFleetTypes))
-
-	for _, ship := range ships {
-		if _, exists := StandardShipLengths[ship.Type]; !exists {
-			return fmt.Errorf("%w: %q", ErrUnknownShipType, ship.Type)
-		}
-		if seenTypes[ship.Type] {
-			return fmt.Errorf("%w: %q", ErrDuplicateShipType, ship.Type)
-		}
-		seenTypes[ship.Type] = true
-
-		cells, err := ship.Cells()
-		if err != nil {
-			return fmt.Errorf("existing ship %q: %w", ship.Type, err)
-		}
-
-		for _, c := range cells {
-			if occupied[c.X][c.Y] {
-				return fmt.Errorf("%w at (%d,%d) by existing ship %q", ErrShipOverlap, c.X, c.Y, ship.Type)
-			}
-			occupied[c.X][c.Y] = true
-		}
-	}
-
-	return nil
+	_, err := validateFleetShips(ships, "existing ship ")
+	return err
 }
 
 // AutoPlaceRemaining preserves any valid existing placed ships and randomly
