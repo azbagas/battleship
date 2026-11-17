@@ -13,7 +13,7 @@ A browser-based, real-time, two-player online Battleship game built as a React/T
 - [Tasks](docs/TASKS.md): Current development plan and task progress.
 
 ## Prerequisites
-- [Go](https://go.dev/) 1.23+
+- [Go](https://go.dev/) 1.26+
 - [Node.js](https://nodejs.org/) 22+ & npm
 - [Docker](https://www.docker.com/) & Docker Compose (optional for local containerized run)
 
