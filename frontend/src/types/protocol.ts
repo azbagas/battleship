@@ -214,6 +214,8 @@ export interface RoomStatePayload {
   shotLog?: ShotRecordPayload[]
   opponentDisconnected?: boolean
   opponentGraceDeadline?: string
+  rematchOfferedBy?: string
+  rematchCancelReason?: string
 }
 
 export interface RoomReadyStatePayload {
@@ -245,6 +247,7 @@ export const ErrorCode = {
   InvalidCoordinate: 'INVALID_COORDINATE',
   GameOver: 'GAME_OVER',
   RematchNotAllowed: 'REMATCH_NOT_ALLOWED',
+  OpponentNotPresent: 'OPPONENT_NOT_PRESENT',
   NotInFinished: 'NOT_IN_FINISHED',
   RateLimitExceeded: 'RATE_LIMIT_EXCEEDED',
 } as const

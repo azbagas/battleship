@@ -338,3 +338,57 @@ func TestFinishedMatch_OpponentDisconnectCleansUpRoom(t *testing.T) {
 		t.Errorf("expected 0 rooms in memory after guest disconnect, got %d", mgr.TotalRoomsInMemory())
 	}
 }
+
+func TestRematch_LeaveRoomWithoutOfferNotifiesRemainingPlayer(t *testing.T) {
+	_, mgr, _, pHost, pGuest, _, sGuest, room := setupFinishedMatch(t)
+
+	// Host leaves to lobby BEFORE either player requests a rematch
+	if err := mgr.LeaveRoom(pHost.ID); err != nil {
+		t.Fatalf("host LeaveRoom failed: %v", err)
+	}
+
+	guestCancelled := filterMessages(sGuest, "rematch.cancelled")
+	if len(guestCancelled) != 1 {
+		t.Fatalf("expected 1 rematch.cancelled to guest when host leaves without prior offer, got %d", len(guestCancelled))
+	}
+	if guestCancelled[0].payload.(RematchCancelledPayload).Reason != "left" {
+		t.Errorf("expected reason 'left', got %v", guestCancelled[0].payload)
+	}
+
+	// Subsequent rematch attempt by guest must fail with ErrOpponentNotPresent
+	if err := mgr.AcceptRematch(pGuest.ID); !errors.Is(err, ErrOpponentNotPresent) {
+		t.Errorf("expected ErrOpponentNotPresent after host left, got %v", err)
+	}
+
+	// Reconnecting guest should receive RematchCancelReason: "left" in restored state
+	view, err := mgr.HandleReconnect(pGuest.ID)
+	if err != nil {
+		t.Fatalf("HandleReconnect failed: %v", err)
+	}
+	if view == nil || view.RoomID != room.ID {
+		t.Fatalf("expected restored view for room %s, got %+v", room.ID, view)
+	}
+	if view.RematchCancelReason != "left" {
+		t.Errorf("expected RematchCancelReason 'left' on reconnect, got %q", view.RematchCancelReason)
+	}
+}
+
+func TestRematch_DisconnectWithoutOfferNotifiesRemainingPlayer(t *testing.T) {
+	_, mgr, _, pHost, pGuest, sHost, _, _ := setupFinishedMatch(t)
+
+	// Guest disconnects BEFORE either player requests a rematch
+	mgr.HandleDisconnect(pGuest.ID)
+
+	hostCancelled := filterMessages(sHost, "rematch.cancelled")
+	if len(hostCancelled) != 1 {
+		t.Fatalf("expected 1 rematch.cancelled to host when guest disconnects without prior offer, got %d", len(hostCancelled))
+	}
+	if hostCancelled[0].payload.(RematchCancelledPayload).Reason != "disconnected" {
+		t.Errorf("expected reason 'disconnected', got %v", hostCancelled[0].payload)
+	}
+
+	// Subsequent rematch attempt by host must fail with ErrOpponentNotPresent
+	if err := mgr.AcceptRematch(pHost.ID); !errors.Is(err, ErrOpponentNotPresent) {
+		t.Errorf("expected ErrOpponentNotPresent after guest disconnected, got %v", err)
+	}
+}

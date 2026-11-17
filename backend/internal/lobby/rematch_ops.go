@@ -72,6 +72,7 @@ func (m *LobbyManager) AcceptRematch(playerID string) error {
 	room.EndReason = ""
 	room.HostRematch = false
 	room.GuestRematch = false
+	room.RematchCancelReason = ""
 	room.GameID = generateGameID()
 	room.StartedAt = m.clock.Now()
 	room.Recorded = false
@@ -116,12 +117,20 @@ func (m *LobbyManager) DeclineRematch(playerID string) error {
 
 	room.HostRematch = false
 	room.GuestRematch = false
+	room.RematchCancelReason = "declined"
+
+	otherInRoom := false
+	if opponentID != "" {
+		if oppRoom, err := m.registry.GetPlayerRoom(opponentID); err == nil && oppRoom == room.ID {
+			otherInRoom = true
+		}
+	}
 
 	slog.Info("rematch declined", "roomId", room.ID, "playerId", playerID)
 	m.mu.Unlock()
 
 	cancelled := RematchCancelledPayload{Reason: "declined"}
-	if opponentID != "" {
+	if otherInRoom {
 		m.send(opponentID, "rematch.cancelled", cancelled)
 	}
 	m.send(playerID, "rematch.cancelled", cancelled)

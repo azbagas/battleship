@@ -46,6 +46,9 @@ describe('lobbyErrorMessage', () => {
     expect(lobbyErrorMessage({ code: ErrorCode.CannotJoinOwnRoom, message: 'raw' })).toBe(
       'You cannot join your own room.',
     )
+    expect(lobbyErrorMessage({ code: ErrorCode.OpponentNotPresent, message: 'raw' })).toBe(
+      'Opponent has already left the room. Rematch is unavailable.',
+    )
   })
 
   it('falls back to the server message, then a generic one', () => {

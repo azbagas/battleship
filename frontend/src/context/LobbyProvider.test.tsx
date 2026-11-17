@@ -580,5 +580,63 @@ describe('LobbyProvider', () => {
     expect(result.current.recentEvents).toHaveLength(2)
     expect(result.current.recentEvents[0].cell).toEqual({ x: 1, y: 1 })
   })
+
+  it('transitions rematchStatus to cancelled on OpponentNotPresent error and hydrates rematchCancelReason on reconnect', () => {
+    const { result } = renderHook(() => useLobby(), { wrapper })
+
+    const roomStateHandler = messageHandlers.get('room.state')
+
+    act(() => {
+      roomStateHandler!({
+        roomId: 'r_fin1',
+        phase: 'finished',
+        role: 'host',
+        host: { id: 'p1', name: 'Admiral Nimitz' },
+        guest: { id: 'p2', name: 'Commander Spock' },
+        winnerPlayerId: 'p1',
+        endReason: 'all_sunk',
+        createdAt: '2026-11-10T12:00:00Z',
+      })
+    })
+
+    expect(result.current.rematchStatus).toBe('idle')
+
+    act(() => {
+      errorHandlers.forEach((h) =>
+        h({ code: ErrorCode.OpponentNotPresent, message: 'opponent is not in the room or disconnected' }),
+      )
+    })
+
+    expect(result.current.rematchStatus).toBe('cancelled')
+    expect(result.current.rematchCancelReason).toBe('left')
+    expect(result.current.lobbyError).toBe(
+      'Opponent has already left the room. Rematch is unavailable.',
+    )
+
+    // Hydrate from restoredState after page reload
+    act(() => {
+      helloOKHandlers.forEach((h) =>
+        h({
+          playerId: 'p1',
+          sessionToken: 'tok1',
+          displayName: 'Admiral Nimitz',
+          restoredState: {
+            roomId: 'r_fin1',
+            phase: 'finished',
+            role: 'host',
+            host: { id: 'p1', name: 'Admiral Nimitz' },
+            guest: { id: 'p2', name: 'Commander Spock' },
+            winnerPlayerId: 'p1',
+            endReason: 'all_sunk',
+            rematchCancelReason: 'disconnected',
+            createdAt: '2026-11-10T12:00:00Z',
+          },
+        }),
+      )
+    })
+
+    expect(result.current.rematchStatus).toBe('cancelled')
+    expect(result.current.rematchCancelReason).toBe('disconnected')
+  })
 })
 

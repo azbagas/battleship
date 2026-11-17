@@ -66,7 +66,6 @@ func (m *LobbyManager) HandleDisconnect(playerID string) {
 	case PhaseFinished:
 		_, opponentID, _ := room.roleAndOpponent(playerID)
 
-		hadRematchOffer := room.HostRematch || room.GuestRematch
 		room.HostRematch = false
 		room.GuestRematch = false
 
@@ -77,6 +76,12 @@ func (m *LobbyManager) HandleDisconnect(playerID string) {
 			if oppRoom, err := m.registry.GetPlayerRoom(opponentID); err == nil && oppRoom == room.ID {
 				otherInRoom = true
 			}
+		}
+
+		notifyOtherRematchCancelled := false
+		if otherInRoom && opponentID != "" && room.EndReason == endReasonAllSunk {
+			room.RematchCancelReason = "disconnected"
+			notifyOtherRematchCancelled = true
 		}
 
 		roomDeleted := false
@@ -91,7 +96,7 @@ func (m *LobbyManager) HandleDisconnect(playerID string) {
 		roomID := room.ID
 		m.mu.Unlock()
 
-		if hadRematchOffer && opponentID != "" {
+		if notifyOtherRematchCancelled {
 			m.send(opponentID, "rematch.cancelled", RematchCancelledPayload{Reason: "disconnected"})
 		}
 

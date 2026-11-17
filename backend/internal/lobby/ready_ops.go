@@ -284,10 +284,13 @@ func (m *LobbyManager) leaveFinishedLocked(room *Room, playerID string) error {
 	}
 
 	notifyOtherRematchCancelled := false
-	if otherInRoom && otherID != "" && (room.HostRematch || room.GuestRematch) {
+	if otherInRoom && otherID != "" {
 		room.HostRematch = false
 		room.GuestRematch = false
-		notifyOtherRematchCancelled = true
+		if room.EndReason == endReasonAllSunk {
+			room.RematchCancelReason = "left"
+			notifyOtherRematchCancelled = true
+		}
 	}
 
 	roomDeleted := false

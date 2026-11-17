@@ -18,6 +18,7 @@ const LOBBY_ERROR_MESSAGES: Record<string, string> = {
     'Coordinate has already been targeted. Select an uncharted grid cell.',
   [ErrorCode.GameOver]: 'The engagement has already concluded.',
   [ErrorCode.RematchNotAllowed]: 'Rematch is only available following a normal completed game.',
+  [ErrorCode.OpponentNotPresent]: 'Opponent has already left the room. Rematch is unavailable.',
 }
 
 /** User-facing text for a server error; unknown codes fall back to the server message. */

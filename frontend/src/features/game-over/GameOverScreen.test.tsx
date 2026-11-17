@@ -255,5 +255,20 @@ describe('GameOverScreen', () => {
     fireEvent.click(returnBtn)
     expect(leaveRoomMock).toHaveBeenCalledTimes(1)
   })
+
+  it('renders and dismisses lobbyError alert when present', () => {
+    const clearLobbyErrorMock = vi.fn()
+    const lobby = createMockLobby({
+      lobbyError: 'Opponent has already left the room. Rematch is unavailable.',
+      clearLobbyError: clearLobbyErrorMock,
+    })
+    renderComponent(lobby)
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Opponent has already left the room. Rematch is unavailable.',
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Dismiss alert/i }))
+    expect(clearLobbyErrorMock).toHaveBeenCalledTimes(1)
+  })
 })
 

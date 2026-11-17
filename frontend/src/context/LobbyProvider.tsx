@@ -4,6 +4,7 @@ import {
   BattleStartPayload,
   BattleTurnPayload,
   Coord,
+  ErrorCode,
   ErrorPayload,
   GameOverPayload,
   HelloOKPayload,
@@ -115,59 +116,74 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
     setPlacementDeadline(null)
   }, [])
 
-  const hydrateFromRoomState = useCallback((state: Partial<RoomStatePayload>) => {
-    if (state.opponentDisconnected && state.opponentGraceDeadline) {
-      setOpponentDisconnectDeadline(state.opponentGraceDeadline)
-    } else {
-      setOpponentDisconnectDeadline(null)
-    }
-    if (typeof state.hostReady === 'boolean' && typeof state.guestReady === 'boolean') {
-      setReadyState({ hostReady: state.hostReady, guestReady: state.guestReady })
-    }
-    if (state.placementDeadline) {
-      setPlacementDeadline(state.placementDeadline)
-    }
-    if (typeof state.fleetConfirmed === 'boolean') {
-      setIsFleetConfirmed(state.fleetConfirmed)
-    }
-    if (typeof state.opponentConfirmed === 'boolean') {
-      setIsOpponentConfirmed(state.opponentConfirmed)
-    }
-    if (Array.isArray(state.ownFleet)) {
-      setOwnFleet(state.ownFleet)
-    }
-    if (state.turnPlayerId) {
-      setTurnPlayerId(state.turnPlayerId)
-    }
-    if (state.turnDeadline) {
-      setTurnDeadline(state.turnDeadline)
-    }
-    if (state.winnerPlayerId) {
-      const shotCount = Array.isArray(state.shotLog) ? state.shotLog.length : 0
-      setGameOverResult((prev) => ({
-        winnerPlayerId: state.winnerPlayerId!,
-        reason: state.endReason || 'all_sunk',
-        totalShots: shotCount > 0 ? shotCount : (prev?.totalShots ?? 0),
-      }))
-    }
-    if (Array.isArray(state.shotLog) && state.shotLog.length > 0) {
-      setRecentEvents(shotLogToEvents(state.shotLog))
-    }
-    if (state.battleView) {
-      if (Array.isArray(state.battleView.targetBoard?.shots)) {
-        setTargetShots(shotsToMap(state.battleView.targetBoard.shots))
+  const hydrateFromRoomState = useCallback(
+    (state: Partial<RoomStatePayload>, currentPlayerId?: string) => {
+      if (state.opponentDisconnected && state.opponentGraceDeadline) {
+        setOpponentDisconnectDeadline(state.opponentGraceDeadline)
+      } else {
+        setOpponentDisconnectDeadline(null)
       }
-      if (Array.isArray(state.battleView.ownBoard?.shots)) {
-        setOwnShots(shotsToMap(state.battleView.ownBoard.shots))
+      if (typeof state.hostReady === 'boolean' && typeof state.guestReady === 'boolean') {
+        setReadyState({ hostReady: state.hostReady, guestReady: state.guestReady })
       }
-      if (Array.isArray(state.battleView.targetBoard?.sunkShips)) {
-        setOpponentSunkShips(state.battleView.targetBoard.sunkShips)
+      if (state.placementDeadline) {
+        setPlacementDeadline(state.placementDeadline)
       }
-      if (Array.isArray(state.battleView.ownBoard?.sunkShips)) {
-        setOwnSunkShips(state.battleView.ownBoard.sunkShips)
+      if (typeof state.fleetConfirmed === 'boolean') {
+        setIsFleetConfirmed(state.fleetConfirmed)
       }
-    }
-  }, [])
+      if (typeof state.opponentConfirmed === 'boolean') {
+        setIsOpponentConfirmed(state.opponentConfirmed)
+      }
+      if (Array.isArray(state.ownFleet)) {
+        setOwnFleet(state.ownFleet)
+      }
+      if (state.turnPlayerId) {
+        setTurnPlayerId(state.turnPlayerId)
+      }
+      if (state.turnDeadline) {
+        setTurnDeadline(state.turnDeadline)
+      }
+      if (state.winnerPlayerId) {
+        const shotCount = Array.isArray(state.shotLog) ? state.shotLog.length : 0
+        setGameOverResult((prev) => ({
+          winnerPlayerId: state.winnerPlayerId!,
+          reason: state.endReason || 'all_sunk',
+          totalShots: shotCount > 0 ? shotCount : (prev?.totalShots ?? 0),
+        }))
+      }
+      if (Array.isArray(state.shotLog) && state.shotLog.length > 0) {
+        setRecentEvents(shotLogToEvents(state.shotLog))
+      }
+      if (state.battleView) {
+        if (Array.isArray(state.battleView.targetBoard?.shots)) {
+          setTargetShots(shotsToMap(state.battleView.targetBoard.shots))
+        }
+        if (Array.isArray(state.battleView.ownBoard?.shots)) {
+          setOwnShots(shotsToMap(state.battleView.ownBoard.shots))
+        }
+        if (Array.isArray(state.battleView.targetBoard?.sunkShips)) {
+          setOpponentSunkShips(state.battleView.targetBoard.sunkShips)
+        }
+        if (Array.isArray(state.battleView.ownBoard?.sunkShips)) {
+          setOwnSunkShips(state.battleView.ownBoard.sunkShips)
+        }
+      }
+      if (state.phase === 'finished') {
+        if (state.rematchCancelReason) {
+          setRematchStatus('cancelled')
+          setRematchCancelReason(state.rematchCancelReason)
+        } else if (state.rematchOfferedBy) {
+          setRematchStatus(
+            state.rematchOfferedBy === currentPlayerId
+              ? 'offered_by_me'
+              : 'offered_by_opponent',
+          )
+        }
+      }
+    },
+    [],
+  )
 
   // Reset lobby state if session logs out or resets
   useEffect(() => {
@@ -195,7 +211,7 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
         const state = payload.restoredState as Partial<RoomStatePayload>
         if (state.roomId && state.phase) {
           setActiveRoom(payload.restoredState as RoomStatePayload)
-          hydrateFromRoomState(state)
+          hydrateFromRoomState(state, payload.playerId)
         }
       } else {
         // If the player previously had an active room and restoredState is null/empty,
@@ -266,7 +282,7 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
         resetBattleState()
         resetRematchState()
       }
-      hydrateFromRoomState(payload)
+      hydrateFromRoomState(payload, session.player?.playerId)
       setIsCreating(false)
       setJoiningRoomId(null)
       setIsLeavingRoom(false)
@@ -397,6 +413,10 @@ export const LobbyProvider: React.FC<LobbyProviderProps> = ({
       setIsCancelling(false)
       setIsTogglingReady(false)
       setIsLeavingRoom(false)
+      if (err.code === ErrorCode.OpponentNotPresent) {
+        setRematchStatus('cancelled')
+        setRematchCancelReason((prev) => prev || 'left')
+      }
       setLobbyError(lobbyErrorMessage(err))
     })
 

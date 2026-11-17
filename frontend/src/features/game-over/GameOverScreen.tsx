@@ -12,6 +12,8 @@ export const GameOverScreen: React.FC = () => {
     opponentSunkShips,
     rematchStatus,
     rematchCancelReason,
+    lobbyError,
+    clearLobbyError,
     acceptRematch,
     declineRematch,
     leaveRoom,
@@ -47,6 +49,26 @@ export const GameOverScreen: React.FC = () => {
           </div>
           <ConnectionBadge status={connectionStatus} isConflict={isSessionConflict} />
         </div>
+
+        {lobbyError && (
+          <div
+            role="alert"
+            className="flex items-center justify-between p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs sm:text-sm font-mono text-left"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-rose-400 font-bold">WARNING:</span>
+              <span>{lobbyError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={clearLobbyError}
+              className="text-rose-400 hover:text-rose-200 ml-4 font-bold text-base leading-none"
+              aria-label="Dismiss alert"
+            >
+              &times;
+            </button>
+          </div>
+        )}
 
         {/* Hero Outcome Banner */}
         <div

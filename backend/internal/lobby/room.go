@@ -61,6 +61,7 @@ type Room struct {
 	Recorded                bool
 	HostRematch             bool
 	GuestRematch            bool
+	RematchCancelReason     string
 }
 
 // stopDisconnectTimers stops all disconnect grace timers and clears their deadlines.
@@ -165,6 +166,8 @@ type RoomStateView struct {
 	EndReason              string                 `json:"endReason,omitempty"`
 	OpponentDisconnected   bool                   `json:"opponentDisconnected,omitempty"`
 	OpponentGraceDeadline  *time.Time             `json:"opponentGraceDeadline,omitempty"`
+	RematchOfferedBy       string                 `json:"rematchOfferedBy,omitempty"`
+	RematchCancelReason    string                 `json:"rematchCancelReason,omitempty"`
 }
 
 // LobbySnapshotPayload represents the full list of waiting rooms sent on entry.

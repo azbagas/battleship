@@ -336,6 +336,16 @@ func (m *LobbyManager) buildRoomStateViewLocked(room *Room, role string) RoomSta
 			bv := game.BuildPlayerBattleView(ownBoard, targetBoard)
 			view.BattleView = &bv
 		}
+
+		if room.Phase == PhaseFinished && room.EndReason == endReasonAllSunk {
+			if room.RematchCancelReason != "" {
+				view.RematchCancelReason = room.RematchCancelReason
+			} else if room.HostRematch {
+				view.RematchOfferedBy = room.HostPlayerID
+			} else if room.GuestRematch {
+				view.RematchOfferedBy = room.GuestPlayerID
+			}
+		}
 	}
 
 	return view
