@@ -17,23 +17,6 @@ Next up: v1.1 planning (Single-player AI opponent & Match history/replay UI per 
 ## v1.1
 > _Add new feature groups here AFTER [PRD.md](PRD.md) has been updated and approved._
 
-## Backend refactor (no behavior change)
-Goal: split `internal/lobby/manager.go` into feature-scoped `*_ops.go` files, adopt typed event payloads, clean up `internal/ws`, `internal/game`, and `cmd/server` config.
-- [x] B-01 `internal/game/board.go`: extract `isShipSunk` and `validateFleetShips` helpers. Done when: `go test -race ./...`, `golangci-lint run`, `go build ./cmd/server` pass.
-- [x] B-02 `internal/lobby`: add typed `events.go`, `Room` timer/role helpers, shared `LobbyManager` helpers, and split `manager.go` into `lobby_ops.go`, `ready_ops.go`, `placement_ops.go`, `battle_ops.go`, `disconnect_ops.go`, `rematch_ops.go`, `persistence.go` (+ update `*_ops_test.go` assertions). Done when: `go test -race ./...`, `golangci-lint run`, `go build ./cmd/server` pass.
-- [x] B-03 `internal/ws`: extract `sender.go`, alias payload structs in `protocol.go`, and clean up `handler.go` (`dispatchMessage`, `unmarshalOptionalPayload`, handshake helpers, table-driven `handleLobbyError`). Done when: `go test -race ./...`, `golangci-lint run`, `go build ./cmd/server` pass.
-- [x] B-04 `cmd/server`: extract `config.go` (`loadConfig`, `buildWSOptions`) and add config unit tests in `main_test.go`. Done when: `go test -race ./...`, `golangci-lint run`, `go build ./cmd/server` pass.
-- [x] B-05 Update `docs/ARCHITECTURE.md` and `docs/TASKS.md`, run full backend checks + `npm run test:e2e`. Done when: all unit, race, lint, build, and E2E tests pass.
-
-## Frontend refactor (no behavior change)
-Goal: split large screens into `src/features/<screen>/` modules and remove duplicated logic. Existing tests change only in import paths; `LobbyProvider.test.tsx` stays unmodified.
-- [x] R-01 Shared hooks: `useCountdown`, `useGridKeyboardNav`, `getRoomParticipants` (`utils/roomParticipants.ts`) (+ tests). Done when: test, lint, build pass. (`OpponentDisconnectBanner` adopted `useCountdown`; Battle/Placement adopt the hooks when split in R-03/R-04.)
-- [x] R-02 Shared components: `ReconnectingBanner`, `ConfirmDialog` (adopted by Battle/Placement/ReadyUp); deleted unused `PlacementPlaceholder.tsx`. `GridFrame` moved to R-03 (built against real usage). Done when: test, lint, build pass.
-- [x] R-03 Split `BattleScreen` into `features/battle/` (+ `cellAppearance` tests; shared `GridFrame` added; fleet panels are `FriendlyFleetPanel`/`HostileFleetPanel`). Done when: test, lint, build, e2e pass.
-- [x] R-04 Split `PlacementScreen` into `features/placement/` (+ `usePlacementFleet` tests). Done when: test, lint, build, e2e pass.
-- [x] R-05 `LobbyProvider` de-duplication (`roomStateMappers`, `lobbyErrorMessages`, `hydrateFromRoomState`, `resetPlacementState`). Done when: unmodified `LobbyProvider.test.tsx` passes, lint, build pass.
-- [x] R-06 Move remaining screens into `features/`, update ARCHITECTURE.md. Done when: test, lint, build, e2e pass.
-
 ## Notes / Decisions
 <!-- Non-obvious choices made during implementation, with a date.
      Format: YYYY-MM-DD: what was decided and why. -->
@@ -50,3 +33,5 @@ Goal: split large screens into `src/features/<screen>/` modules and remove dupli
 ## Archive
 <!-- Move finished version groups here as one-line summaries, e.g. "v1 shipped: F-01 to F-03." -->
 - v1 shipped (2026-11-16): Setup (T-01, T-01b), F-01 Session Identity (T-02–T-03), F-02 Live Lobby & Logging (T-04–T-05b), F-03 Ready-Up (T-06–T-07), F-04 Fleet Placement (T-08–T-10), F-05 Turn-Based Battle (T-11–T-13), F-06 Disconnect/Reconnect/Forfeit (T-14–T-15), F-07 Game Over/Rematch/SQLite Store (T-16–T-18), F-08 Security/Responsive/A11y/SVG Visuals (T-19–T-20b), and Wrap-up E2E/PRD Audit/Walkthrough (T-21–T-23).
+- Frontend refactor (2026-11-17): Split screens into `src/features/<screen>/`, extracted shared hooks/components, and deduplicated `LobbyProvider` (R-01–R-06).
+- Backend refactor (2026-11-17): Deduplicated `internal/game/board.go`, split `internal/lobby` into `*_ops.go` with typed `events.go`, extracted `internal/ws/sender.go` and `cmd/server/config.go` (B-01–B-05).
